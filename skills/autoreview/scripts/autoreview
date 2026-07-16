@@ -7187,6 +7187,7 @@ def sensitive_repo_path_risk(rel: str) -> str | None:
     if (
         any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS)
         and not design_token_artifact_path(path, SENSITIVE_NAME_PATTERNS)
+        and not github_workflow_path(path)
     ):
         return "sensitive filename"
     return None
@@ -7220,6 +7221,14 @@ def design_token_artifact_path(
         part.lower() not in allowed_design_token_dirs
         and any(pattern.search(part) for pattern in sensitive_patterns)
         for part in path.parts[:-1]
+    )
+
+
+def github_workflow_path(path: Path) -> bool:
+    return (
+        path.parts[:2] == (".github", "workflows")
+        and len(path.parts) == 3
+        and path.suffix in {".yml", ".yaml"}
     )
 
 
@@ -7281,6 +7290,7 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     if (
         any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS)
         and not design_token_artifact_path(path, TRACKED_SENSITIVE_NAME_PATTERNS)
+        and not github_workflow_path(path)
     ):
         return "sensitive filename"
     return None

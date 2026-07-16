@@ -896,6 +896,42 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.assertIn("+review me", bundle)
                 self.assertFalse(truncated)
 
+    def test_secret_named_workflows_are_reviewable_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "base.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            workflow = repo / ".github" / "workflows" / "secret-scan.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("name: Secret scan\n", encoding="utf-8")
+            untracked_bundle, _ = self.helper["local_bundle"](repo)
+            self.assertIn("secret-scan.yml", untracked_bundle)
+
+            git(repo, "add", str(workflow.relative_to(repo)))
+            tracked_bundle, _ = self.helper["local_bundle"](repo)
+            self.assertIn("secret-scan.yml", tracked_bundle)
+
+            git(repo, "commit", "-q", "-m", "add secret scanner")
+            branch_bundle, _ = self.helper["branch_bundle"](repo, base)
+            commit_bundle, _ = self.helper["commit_bundle"](repo, "HEAD")
+            self.assertIn("secret-scan.yml", branch_bundle)
+            self.assertIn("secret-scan.yml", commit_bundle)
+
+    def test_case_variant_secret_named_workflows_remain_sensitive(self) -> None:
+        for rel in (
+            ".GitHub/workflows/secret-scan.yml",
+            ".github/Workflows/secret-scan.yml",
+            ".github/workflows/secret-scan.YML",
+        ):
+            with self.subTest(rel=rel):
+                self.assertIsNotNone(self.helper["sensitive_repo_path_risk"](rel))
+                self.assertIsNotNone(
+                    self.helper["tracked_sensitive_repo_path_risk"](rel)
+                )
+
     def test_tracked_source_names_and_env_templates_remain_reviewable(self) -> None:
         for rel in (
             "tokenizer.py",
@@ -923,6 +959,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "token_count/generated.py",
             ".docker/Dockerfile",
             ".docker/scripts/build.sh",
+            ".github/workflows/secret-scan.yml",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
