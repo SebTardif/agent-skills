@@ -17,6 +17,8 @@ Use when:
 - after non-trivial code edits, before final/commit/ship
 - reviewing a local branch or PR branch after fixes
 
+Do not require autoreview for a change whose entire diff is prose-only internal notes or `SKILL.md` documentation. Still inspect the diff directly and run the repository's lightweight documentation validation, if any. This exception does not cover user-facing documentation, executable examples, configuration, scripts, generated files, or behavior changes.
+
 ## Contract
 
 - Treat review output as advisory. Never blindly apply it.
