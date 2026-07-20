@@ -2580,6 +2580,26 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_review_patch_redacts_short_unquoted_value_in_truncated_call(self) -> None:
+        short_secret = "12345678"
+        patch = (
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+password = decode(\n"
+            f"+  {short_secret},\n"
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "typescript truncated credential call",
+            ["src/runtime.ts"],
+            patch,
+        )
+
+        self.assertNotIn(short_secret, redacted)
+        self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], redacted)
+
     def test_review_bundle_keeps_config_paths_but_redacts_values(self) -> None:
         config_path = "channels.telegram.accounts.work.tokenFile"
         literal_assignment_value = (
@@ -4380,7 +4400,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             fragments,
         )
 
-        self.assertIn(self.helper["REVIEW_SECRET_REDACTION"], redacted_patch)
+        self.assertIn('choose("redacted", "redacted")', redacted_patch)
         self.assertNotIn(primary, redacted_patch)
         self.assertNotIn(backup, redacted_patch)
         validated = self.helper["validate_review_patch"](
@@ -4388,7 +4408,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ["runtime.ts"],
             patch,
         )
-        self.assertIn(self.helper["REVIEW_SECRET_REDACTION"], validated)
+        self.assertIn('choose("redacted", "redacted")', validated)
         self.assertNotIn(primary, validated)
         self.assertNotIn(backup, validated)
 
@@ -4539,6 +4559,49 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         self.assertNotIn(fixture_value, redacted_patch)
         self.assertIn('defaults["x || y"] || "redacted"', redacted_patch)
+
+    def test_review_patch_redacts_repeated_nested_fallback_literal(self) -> None:
+        short_secret = "hunter2"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1,2 @@\n"
+            f'+password = getenv("PASSWORD") || choose("{short_secret}");\n'
+            f'+log("{short_secret}");\n'
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertNotIn(short_secret, redacted)
+        self.assertIn('choose("redacted")', redacted)
+        self.assertIn('log("redacted")', redacted)
+
+    def test_review_patch_preserves_repeated_nested_noncredential_literals(self) -> None:
+        short_secret = "hunter2"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1,3 @@\n"
+            f'+password = derive(input, "application/json") || choose("application/json", "{short_secret}");\n'
+            '+log("application/json");\n'
+            f'+log("{short_secret}");\n'
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertNotIn(short_secret, redacted)
+        self.assertIn(self.helper["REVIEW_SECRET_REDACTION"], redacted)
+        self.assertIn('log("application/json")', redacted)
 
     def test_review_patch_ignores_fallback_literals_inside_comments(self) -> None:
         patch = (
@@ -5139,7 +5202,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ["runtime.ts"],
             patch,
         )
-        self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], redacted)
+        self.assertIn('choose("redacted", "redacted")', redacted)
         self.assertNotIn(primary, redacted)
         self.assertNotIn(backup, redacted)
 
@@ -5162,7 +5225,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ["runtime.ts"],
             patch,
         )
-        self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], redacted)
+        self.assertIn('choose("redacted", "redacted")', redacted)
         self.assertNotIn(primary, redacted)
         self.assertNotIn(backup, redacted)
 

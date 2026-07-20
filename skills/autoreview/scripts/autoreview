@@ -4887,6 +4887,36 @@ def call_arguments_risk(
     return False
 
 
+def truncated_call_arguments_risk(
+    arguments: str,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if call_arguments_risk(
+        arguments,
+        call_target,
+        javascript_dialect=javascript_dialect,
+    ):
+        return True
+    for argument in split_top_level_call_arguments(arguments):
+        match = SECRET_FALLBACK_UNQUOTED_PATTERN.fullmatch(argument.strip())
+        if match is None:
+            continue
+        value = match.group("value")
+        if value.casefold() in SECRET_PLACEHOLDER_VALUES or any(
+            pattern.fullmatch(value)
+            for pattern in UNQUOTED_SECRET_REFERENCE_PATTERNS
+        ):
+            continue
+        if len(value) >= 7 and (
+            any(character.isdigit() for character in value)
+            or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value) is None
+        ):
+            return True
+    return False
+
+
 def balanced_delimiter_end(
     text: str,
     start: int,
@@ -4981,9 +5011,9 @@ def safe_secret_call_suffix(
                     pattern.search(visible_arguments)
                     for pattern in SECRET_FALLBACK_LITERAL_PATTERNS
                 )
-                or fallback_secret_risk(
+                or truncated_call_arguments_risk(
                     visible_arguments,
-                    minimum_length=12,
+                    target,
                     javascript_dialect=javascript_dialect,
                 )
                 else visible_end
@@ -5913,6 +5943,7 @@ def assignment_fallback_literal_spans(
         text,
         expression_start,
         expression_end,
+        include_nested=True,
     )
 
 
@@ -5993,6 +6024,8 @@ def top_level_fallback_value_spans(
     text: str,
     start: int,
     end: int,
+    *,
+    include_nested: bool = False,
 ) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     stack: list[str] = []
@@ -6031,7 +6064,20 @@ def top_level_fallback_value_spans(
                 elif current == "\\":
                     escaped = True
                 elif current == quote:
-                    if not stack and cursor > value_start:
+                    value = text[value_start:cursor]
+                    repeatable_nested_value = (
+                        include_nested
+                        and value.casefold() not in SECRET_PLACEHOLDER_VALUES
+                        and len(value) >= 7
+                        and any(character.isdigit() for character in value)
+                        and not any(
+                            pattern.fullmatch(value)
+                            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+                        )
+                    )
+                    if cursor > value_start and (
+                        not stack or repeatable_nested_value
+                    ):
                         spans.append((value_start, cursor))
                     cursor += 1
                     break
