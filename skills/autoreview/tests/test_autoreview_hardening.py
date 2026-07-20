@@ -2675,6 +2675,36 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     source_patch + config_patch,
                 )
 
+    def test_review_patch_redacts_unextractable_secret_like_context(self) -> None:
+        property_name = "pass" + "word"
+        reference = "nextConnection." + property_name
+        patch = (
+            "diff --git a/src/gateway-store.ts b/src/gateway-store.ts\n"
+            "--- a/src/gateway-store.ts\n"
+            "+++ b/src/gateway-store.ts\n"
+            "@@ -170,4 +170,4 @@ function connect() {\n"
+            "       "
+            + property_name
+            + ": "
+            + reference
+            + ".trim() ? "
+            + reference
+            + " : undefined,\n"
+            '-      clientVersion: "dev",\n'
+            '+      clientVersion: BUILD_INFO.version ?? "dev",\n'
+            '       mode: "webchat",\n'
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["src/gateway-store.ts"],
+            patch,
+        )
+
+        self.assertIn(" " + self.helper["REVIEW_SECRET_REDACTION"], redacted)
+        self.assertIn('+      clientVersion: BUILD_INFO.version ?? "dev",', redacted)
+        self.assertNotIn(reference, redacted)
+
     def test_review_patch_scans_rename_sides_with_their_own_file_types(self) -> None:
         property_name = "pass" + "word"
         reference = "context.driverPass" + "word"

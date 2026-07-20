@@ -7100,6 +7100,22 @@ def redact_secret_like_diff_section(
                 new_spans, new_pem = pem_line_body_spans(content, new_pem)
                 spans.extend(new_spans)
             redacted_content = redact_review_spans(content, spans)
+            if set(prefix) == {" "}:
+                context_still_risky = (
+                    old_risk
+                    and secret_text_risk(
+                        redacted_content,
+                        javascript_dialect=old_dialect,
+                    )
+                ) or (
+                    new_risk
+                    and secret_text_risk(
+                        redacted_content,
+                        javascript_dialect=new_dialect,
+                    )
+                )
+                if context_still_risky:
+                    redacted_content = REVIEW_SECRET_REDACTION
             redacted.append(f"{prefix}{redacted_content}{ending}")
         index = hunk_end
     return "".join(redacted)
