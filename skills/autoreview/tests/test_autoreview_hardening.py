@@ -6543,6 +6543,18 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 self.helper["ensure_claude_isolation_supported"](args, repo)
 
+    def test_claude_canonical_fable_model_uses_portable_cli_selector(self) -> None:
+        self.assertEqual(
+            self.helper["claude_cli_model_selector"]("claude-fable-5"),
+            "fable",
+        )
+        self.assertEqual(
+            self.helper["claude_cli_fallback_models"](
+                "claude-fable-5,claude-opus-5"
+            ),
+            "fable,claude-opus-5",
+        )
+
     def test_claude_runs_outside_repo_with_auto_memory_disabled(self) -> None:
         args = argparse.Namespace(
             claude_allowed_tools=None,

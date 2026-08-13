@@ -10327,6 +10327,19 @@ def claude_review_isolation_flags() -> list[str]:
     ]
 
 
+def claude_cli_model_selector(model: str) -> str:
+    """Translate a canonical review model into Claude's portable selector."""
+    return "fable" if model == "claude-fable-5" else model
+
+
+def claude_cli_fallback_models(models: str) -> str:
+    return ",".join(
+        claude_cli_model_selector(model.strip())
+        for model in models.split(",")
+        if model.strip()
+    )
+
+
 def pi_review_isolation_flags() -> list[str]:
     return [
         "--no-approve",
@@ -11005,9 +11018,11 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if args.stream_engine_output:
         cmd.append("--verbose")
     if args.model:
-        cmd.extend(["--model", args.model])
+        cmd.extend(["--model", claude_cli_model_selector(args.model)])
     if getattr(args, "fallback_model", None):
-        cmd.extend(["--fallback-model", args.fallback_model])
+        cmd.extend(
+            ["--fallback-model", claude_cli_fallback_models(args.fallback_model)]
+        )
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
     with tempfile.TemporaryDirectory(
