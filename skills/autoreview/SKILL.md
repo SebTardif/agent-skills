@@ -1,23 +1,15 @@
 ---
 name: autoreview
-description: "Pre-commit/ship code review: Codex default; optional Claude, Amp, Pi, or Kimi."
+description: "Structured Codex, Claude, Amp, Pi, or Kimi code review when explicitly requested."
 ---
 
 # Auto Review
 
-Run the bundled structured review helper as a closeout check. This is code review, not Guardian `auto_review` approval routing.
+Run the bundled structured review helper only when the user explicitly asks for autoreview, a second-model review, or one of its named review engines. This is code review, not Guardian `auto_review` approval routing.
 
 Codex review is the default when no engine is set. It uses `gpt-5.6-sol` with `high` reasoning by default, then retries once with `gpt-5.6-terra` only when the account cannot access Sol. Claude review is optional and uses `claude-fable-5` by default. Amp review is optional and uses `openai/gpt-5.6-sol` with `high` reasoning by default. Pi and Kimi use the model configured by their respective CLIs unless `--model` overrides it.
 
-For user-visible behavior, pair autoreview with `behavior-validator`. Autoreview is source-aware and judges the change bundle; behavior validation is source-blind and judges the running product or tool against a behavior contract. A clean autoreview is not proof that a UI, CLI, API, or generated artifact works from the user's perspective.
-
-Use when:
-
-- user asks for Codex review / Claude review / Amp review / Pi review / Kimi review / autoreview / second-model review
-- after non-trivial code edits, before final/commit/ship
-- reviewing a local branch or PR branch after fixes
-
-Do not require autoreview for a change whose entire diff is prose-only internal notes or `SKILL.md` documentation. Still inspect the diff directly and run the repository's lightweight documentation validation, if any. This exception does not cover user-facing documentation, executable examples, configuration, scripts, generated files, or behavior changes.
+Do not invoke Autoreview automatically before a commit, push, PR, merge, deploy, or final reply. Repository or workflow rules may call it only when they explicitly name it.
 
 ## Contract
 
@@ -32,8 +24,7 @@ Do not require autoreview for a change whose entire diff is prose-only internal 
 - Prefer root-cause fixes at the right ownership boundary. A coherent refactor is appropriate when it removes the bug class, duplicate policy, stale paths, or ownership confusion; do not default to a symptom patch.
 - When an accepted finding exposes a bug class or repeated pattern, inspect its owner and relevant sibling implementations before fixing.
 - Fix the same bug class across its owner-boundary neighborhood when practical; stop at unrelated invariants, different owners, and unapproved contract changes.
-- Keep going until structured review returns no accepted/actionable findings only while the work remains inside the authorized architectural and task scope.
-- If a review-triggered fix changes code, rerun focused tests and rerun the structured review helper.
+- Run one bounded review pass. If an accepted finding changes code, run the smallest relevant test; rerun Autoreview only when the user explicitly requests another pass.
 - For security-audit suppression changes, verify accepted findings remain auditable: suppressed findings stay in structured output, active output keeps an unsuppressible suppression notice, and aggregate findings cannot hide unrelated active risk.
 - Never switch or override the requested review engine/model except for the documented Codex Sol-to-Terra account-access fallback. Capacity, rate-limit, and unrelated failures keep the same engine/model.
 - Be patient with large bundles. Structured review can take up to 30 minutes while the model call is active, especially with Codex tools or web search.
@@ -48,47 +39,15 @@ Do not require autoreview for a change whose entire diff is prose-only internal 
 - Do not invoke built-in `codex review`, nested reviewers, or reviewer panels from inside the review. The helper builds one validated bundle, calls the selected engine once for normal inputs or once per complete bounded chunk for oversized inputs, validates the structured results, and stops.
 - Stop as soon as the helper exits 0 with no accepted/actionable findings. Do not run an extra review just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
-- Multi-reviewer panels are opt-in only. Use them when explicitly requested or when risk justifies the extra spend; the main agent still verifies every accepted finding before fixing.
+- Multi-reviewer panels are opt-in only. Use them only when explicitly requested; the main agent still verifies every accepted finding before fixing.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
 - If `gh`/Gitcrawl reports `database disk image is malformed`, run `gitcrawl doctor --json` once to let the portable cache repair before retrying review; do not bypass the shim unless repair fails and freshness requires live GitHub.
 - If Gitcrawl reports a portable manifest mismatch, source/runtime DB health error, or stale portable-store checkout, run `gitcrawl doctor --json` and inspect `source_db_health`, `runtime_db_health`, and `portable_store_status` before falling back to live GitHub.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
 
-## Scope Governor
+## Scope
 
-Autoreview is a closeout gate, not permission to change the task's product contract. Define scope by the authorized invariant and its architectural owner, not by the first patch.
-
-Before the first review, record a scope baseline: original request or issue, violated invariant, target branch, intended behavior, owner boundary, relevant sibling surfaces, and public/security/product contracts. Record changed files and non-test LOC as measurements, not hard caps. For inherited or already-bloated branches, distinguish the intended architectural fix from unrelated branch drift.
-
-Before patching a finding, classify it:
-
-- **In-scope blocker**: the finding affects the same violated invariant or owner-boundary neighborhood, including relevant sibling implementations and connected obsolete paths, and can be fixed without changing the task's contract.
-- **Follow-up**: the finding is real but belongs to an unrelated bug class, different owner, independent cleanup, or broader hardening track.
-- **Stop-and-escalate**: the finding requires a new protocol/config/storage/public API contract, a different owner boundary, a release-process change, or a design choice outside the original request.
-
-Stop patching and report the scope break instead of continuing when:
-
-- a task turns into an unauthorized product, protocol, migration, storage, security, or release-process change;
-- added files or production LOC no longer serve the authorized invariant, owner boundary, or meaningful simplification; file counts, initial diff size, and arbitrary LOC multipliers are never automatic stop conditions;
-- two review-triggered patch cycles have not converged; pause and reclassify every remaining finding before another edit;
-- the best fix is "define the canonical contract first" rather than another local inference layer;
-- fixing the accepted finding would make the PR no longer describe the same behavior, issue, or owner boundary.
-
-After the two-cycle pause, continue only when every remaining accepted finding is still an in-scope blocker. Otherwise preserve the useful analysis, identify a coherent root-cause-safe landed subset if one exists, and open or request a follow-up for unrelated work. Do not land a symptom patch or keep committing speculative fixes just to satisfy the reviewer.
-
-Do not stack or push review-triggered fix commits while scope classification or focused proof is unresolved. Keep exploratory edits local until the cycle is proven in scope; if scope breaks, remove them from the landing lane instead of preserving them as branch history.
-
-Critical exceptions must be explicit: active data loss, crash, broken install/upgrade, release blocker, or concrete security exposure. If the exception is not one of those, it is not critical enough to blow up scope.
-
-## Release Branches And Release Process
-
-On release, beta, stable, hotfix, signing, notarization, appcast, package-publish, or release-check work, use freeze discipline even when the branch name is not release-like:
-
-- Fix only release blockers, failed release infrastructure, exact backports, install/upgrade breakage, data loss, crashes, or concrete security exposure.
-- Treat non-blocking autoreview findings as follow-ups for `main`, not reasons to broaden the release branch.
-- Do not introduce new product behavior, config surface, protocol shape, migration, plugin ownership, docs narrative, or process policy unless it directly unblocks the release.
-- Keep proof tied to the release target: exact branch/ref, failing check or shipped-risk reason, smallest command/proof, and whether the fix must also forward-port to `main`.
-- If review discovers a real but non-critical design problem during release closeout, stop with a follow-up issue/PR plan; do not use the release branch as the refactor lane.
+Autoreview does not expand the task. Fix only verified blockers in the requested path. Mention unrelated findings without opening a new workstream, and stop when the requested review pass is complete.
 
 ## Skill Path (set once)
 
@@ -276,7 +235,7 @@ use this credential-hydrated path for untrusted contributor or fork code. Run ot
 secret-bearing or credentialed tests separately in an appropriately isolated remote
 runner.
 
-Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
+If tests or review lead to code edits, run the smallest affected test. Do not start a repeated review loop unless the user explicitly asks for one.
 
 ## Review Panels
 
@@ -482,11 +441,4 @@ The helper:
 
 ## Final Report
 
-Include:
-
-- review command used
-- tests/proof run
-- findings accepted/rejected, briefly why
-- the clean review result from the final helper/review run, or why a remaining finding was consciously rejected
-
-Do not run another review solely to improve the final report wording. If the final helper run exited 0 and produced no accepted/actionable findings, report that exact run as clean.
+Report material findings and the resulting status in chat. If there are none, say so plainly. Do not add command logs, test ledgers, proof blocks, or review receipts unless the user asks for them.
