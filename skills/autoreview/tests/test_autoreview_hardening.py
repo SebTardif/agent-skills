@@ -27,6 +27,131 @@ PRIVATE_KEY_BEGIN_TEXT = "BEGIN " + "PRIVATE KEY"
 RSA_PRIVATE_KEY_BEGIN_TEXT = "BEGIN RSA " + "PRIVATE KEY"
 
 
+def write_executable(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+    if os.name != "nt":
+        return path
+    wrapper = path.with_name(f"{path.name}.cmd")
+    wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{path}" %*\r\n', encoding="utf-8")
+    return wrapper
+
+
+def fake_codex_script() -> str:
+    return r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+record = os.environ["AUTOREVIEW_FAKE_RECORD"]
+args = sys.argv[1:]
+Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+if mutation := os.environ.get("AUTOREVIEW_FAKE_MUTATE"):
+    Path(mutation).write_text("mutated during review\n")
+try:
+    output_path = args[args.index("--output-last-message") + 1]
+except ValueError:
+    output_path = args[args.index("-o") + 1]
+report = {
+    "findings": [],
+    "overall_correctness": "patch is correct",
+    "overall_explanation": "fake codex clean",
+    "overall_confidence": 0.99,
+}
+Path(output_path).write_text(json.dumps(report))
+print("fake codex ok")
+'''
+
+
+def fake_claude_script() -> str:
+    return r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if "--version" in args or "-v" in args:
+    print(os.environ.get("AUTOREVIEW_FAKE_CLAUDE_VERSION", "2.1.170 (Claude Code)"))
+    raise SystemExit(0)
+if "--help" in args or "-h" in args:
+    print("--safe-mode\n--setting-sources\n--strict-mcp-config\n--disallowedTools\n--tools\n--print\n--json-schema")
+    raise SystemExit(0)
+record = os.environ["AUTOREVIEW_FAKE_RECORD"]
+Path(record).write_text(json.dumps({
+    "argv": args,
+    "cwd": os.getcwd(),
+    "stdin": sys.stdin.read(),
+    "auto_memory_disabled": os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+}))
+report = {
+    "findings": [],
+    "overall_correctness": "patch is correct",
+    "overall_explanation": "fake claude clean",
+    "overall_confidence": 0.99,
+}
+print(json.dumps(report))
+'''
+
+
+def fake_pi_script() -> str:
+    return r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+invocations = os.environ.get("AUTOREVIEW_FAKE_PI_INVOCATIONS")
+if invocations:
+    with open(invocations, "a", encoding="utf-8") as file:
+        file.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+if "--version" in args or "-v" in args:
+    print(os.environ.get("AUTOREVIEW_FAKE_PI_VERSION", "0.79.0"))
+    raise SystemExit(0)
+if "--help" in args or "-h" in args:
+    print(os.environ.get("AUTOREVIEW_FAKE_PI_HELP", "--print\n--no-approve\n--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\n--no-tools\n--thinking"))
+    raise SystemExit(0)
+record = os.environ["AUTOREVIEW_FAKE_RECORD"]
+Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+report = {
+    "findings": [],
+    "overall_correctness": "patch is correct",
+    "overall_explanation": "fake pi clean",
+    "overall_confidence": 0.99,
+}
+print(json.dumps(report))
+	'''
+
+
+def fake_kimi_script() -> str:
+    return r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if "--version" in args or "-v" in args:
+    print(os.environ.get("AUTOREVIEW_FAKE_KIMI_VERSION", "0.30.0"))
+    raise SystemExit(0)
+if "--help" in args or "-h" in args:
+    print(os.environ.get("AUTOREVIEW_FAKE_KIMI_HELP", "--agent-file\n--skills-dir\n--prompt\n--output-format\n--model"))
+    raise SystemExit(0)
+record = os.environ.get("AUTOREVIEW_FAKE_RECORD")
+if record:
+    Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+report = {
+    "findings": [],
+    "overall_correctness": "patch is correct",
+    "overall_explanation": "fake kimi clean",
+    "overall_confidence": 0.99,
+}
+print(json.dumps(report))
+'''
+
+
 def load_helper() -> dict[str, object]:
     return runpy.run_path(str(SCRIPT), run_name="autoreview_under_test")
 
@@ -87,7 +212,7 @@ def add_fake_trufflehog(
     root: Path,
     env: dict[str, str],
 ) -> None:
-    helper["write_executable"](
+    write_executable(
         root / "trufflehog",
         "#!/usr/bin/env python3\nraise SystemExit(0)\n",
     )
@@ -1502,170 +1627,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         "",
                         "",
                     )
-
-    def test_interrupted_review_resumes_after_last_completed_pass(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            prompts = ["review pass one", "review pass two", "review pass three"]
-            report = {
-                "findings": [],
-                "overall_correctness": "patch is correct",
-                "overall_explanation": "clean",
-                "overall_confidence": 0.9,
-            }
-            args = argparse.Namespace(
-                run_id="resume-test",
-                run_root=str(root / "runs"),
-                allow_partial_panel=False,
-                require_finding=[],
-            )
-            reviewer = argparse.Namespace(
-                engine="pi",
-                model="test-model",
-                fallback_model=None,
-                thinking="high",
-                tools=False,
-                web_search=False,
-                pi_bin="/outside/fake-pi",
-            )
-            reviewers = [reviewer]
-            store = self.helper["open_review_run_store"](
-                args,
-                repo,
-                reviewers,
-                prompts,
-                set(),
-            )
-            calls: list[str] = []
-
-            def interrupted(_reviewer, _repo, prompt, *_args):
-                calls.append(prompt)
-                if prompt == prompts[1]:
-                    raise self.helper["EngineInterrupted"](130)
-                return report
-
-            runner = self.helper["run_review_passes"]
-            with mock.patch.dict(
-                runner.__globals__,
-                {"run_reviewer": interrupted},
-            ):
-                with self.assertRaises(self.helper["EngineInterrupted"]):
-                    runner(args, reviewers, repo, prompts, set(), False, store)
-
-            self.assertEqual(calls, prompts[:2])
-            self.assertTrue((store.path / "pass-0001.json").is_file())
-            self.assertFalse((store.path / "pass-0002.json").exists())
-
-            calls.clear()
-
-            def resumed(_reviewer, _repo, prompt, *_args):
-                calls.append(prompt)
-                return report
-
-            reopened = self.helper["open_review_run_store"](
-                args,
-                repo,
-                reviewers,
-                prompts,
-                set(),
-            )
-            stdout = io.StringIO()
-            with (
-                mock.patch.dict(runner.__globals__, {"run_reviewer": resumed}),
-                contextlib.redirect_stdout(stdout),
-            ):
-                reports = runner(
-                    args,
-                    reviewers,
-                    repo,
-                    prompts,
-                    set(),
-                    False,
-                    reopened,
-                )
-
-            self.assertEqual(calls, prompts[1:])
-            self.assertEqual(len(reports), 3)
-            self.assertIn("1/3 completed passes loaded", stdout.getvalue())
-            self.assertIn("review pass: 1/3 (resumed)", stdout.getvalue())
-            self.assertTrue((store.path / "pass-0003.json").is_file())
-            if os.name != "nt":
-                self.assertEqual(stat.S_IMODE(store.path.stat().st_mode), 0o700)
-                self.assertEqual(
-                    stat.S_IMODE((store.path / "pass-0001.json").stat().st_mode),
-                    0o600,
-                )
-
-    def test_review_resume_refuses_changed_input_or_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            args = argparse.Namespace(
-                run_id="identity-test",
-                run_root=str(root / "runs"),
-                allow_partial_panel=False,
-            )
-            reviewer = argparse.Namespace(
-                engine="pi",
-                model="model-a",
-                fallback_model=None,
-                thinking="high",
-                tools=False,
-                web_search=False,
-                pi_bin="/outside/fake-pi",
-            )
-            opener = self.helper["open_review_run_store"]
-            opener(args, repo, [reviewer], ["first prompt"], {"one.txt"})
-
-            with self.assertRaisesRegex(SystemExit, "identity does not match"):
-                opener(args, repo, [reviewer], ["changed prompt"], {"one.txt"})
-
-            reviewer.model = "model-b"
-            with self.assertRaisesRegex(SystemExit, "identity does not match"):
-                opener(args, repo, [reviewer], ["first prompt"], {"one.txt"})
-
-    def test_review_resume_rejects_tampered_or_noncontiguous_records(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            args = argparse.Namespace(
-                run_id="integrity-test",
-                run_root=str(root / "runs"),
-                allow_partial_panel=False,
-            )
-            reviewer = argparse.Namespace(
-                engine="pi",
-                model="test-model",
-                fallback_model=None,
-                thinking="high",
-                tools=False,
-                web_search=False,
-                pi_bin="/outside/fake-pi",
-            )
-            store = self.helper["open_review_run_store"](
-                args, repo, [reviewer], ["one", "two"], set()
-            )
-            report = {
-                "findings": [],
-                "overall_correctness": "patch is correct",
-                "overall_explanation": "clean",
-                "overall_confidence": 0.9,
-            }
-            self.helper["save_review_run_pass"](store, 2, report)
-            with self.assertRaisesRegex(SystemExit, "contiguous completed prefix"):
-                self.helper["load_review_run_passes"](store, repo, set())
-
-            (store.path / "pass-0002.json").unlink()
-            self.helper["save_review_run_pass"](store, 1, report)
-            record_path = store.path / "pass-0001.json"
-            record = json.loads(record_path.read_text(encoding="utf-8"))
-            record["report"]["overall_explanation"] = "tampered"
-            record_path.write_text(json.dumps(record), encoding="utf-8")
-            if os.name != "nt":
-                record_path.chmod(0o600)
-            with self.assertRaisesRegex(SystemExit, "integrity validation"):
-                self.helper["load_review_run_passes"](store, repo, set())
 
     def test_review_patch_does_not_disclose_controls_in_omitted_paths(self) -> None:
         path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
@@ -3823,17 +3784,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertTrue(self.helper["secret_text_risk"](content))
 
-    def test_fallback_self_test_ignores_ambient_model_overrides(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {
-                "AUTOREVIEW_MODEL": "ambient-global-model",
-                "AUTOREVIEW_CODEX_MODEL": "ambient-codex-model",
-            },
-            clear=False,
-        ):
-            self.helper["self_test_fallback_scope"]()
-
     def test_secret_detector_handles_bare_call_keyword_values(self) -> None:
         content = "client(api_" + "key=" + realistic_secret_value() + ")"
 
@@ -5131,11 +5081,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
         self.assertNotIn("GIT_DIR", env)
         self.assertNotIn("OPENAI_API_KEY", env)
 
-    def test_boolean_environment_values_fail_closed(self) -> None:
-        with mock.patch.dict(os.environ, {"AUTOREVIEW_TEST_BOOL": "flase"}):
-            with self.assertRaisesRegex(SystemExit, "invalid boolean environment value"):
-                self.helper["env_truthy"]("AUTOREVIEW_TEST_BOOL")
-
     def test_prompt_file_keeps_recoverable_repo_path(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -5344,106 +5289,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
-
-    def test_parallel_tests_use_sanitized_environment_for_every_shell(self) -> None:
-        observed: list[dict[str, object]] = []
-        registered: list[object] = []
-        unregistered: list[object] = []
-        sanitized_env = {
-            "PATH": "/usr/bin",
-            "HOME": "/safe/home",
-            "JAVA_TOOL_OPTIONS": "'-Duser.home=/safe/home'",
-        }
-
-        def fake_popen(command: object, **kwargs: object) -> mock.Mock:
-            observed.append({"command": command, **kwargs})
-            proc = mock.Mock()
-            proc.returncode = 0
-            proc.stderr = io.StringIO("")
-            proc.poll.return_value = 0
-            return proc
-
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            with mock.patch.dict(
-                self.helper["start_parallel_tests"].__globals__,
-                {
-                    "safe_test_env": lambda actual_repo, test_home: (
-                        sanitized_env
-                        if actual_repo == repo and not test_home.is_relative_to(repo)
-                        else self.fail("parallel tests sanitized the wrong repository")
-                    ),
-                    "resolve_command": lambda name, actual_repo: (
-                        f"/usr/bin/{name}"
-                        if actual_repo == repo
-                        else self.fail("parallel tests resolved a shell for the wrong repository")
-                    ),
-                    "register_owned_process": registered.append,
-                    "unregister_owned_process": unregistered.append,
-                    "terminate_process_group": lambda proc: None,
-                },
-            ), mock.patch("subprocess.Popen", side_effect=fake_popen):
-                for shell_kind in ("default", "cmd", "powershell", "pwsh"):
-                    proc, started = self.helper["start_parallel_tests"](
-                        "run tests", repo, shell_kind
-                    )
-                    test_home = getattr(proc, "_autoreview_test_home")
-                    self.assertTrue(test_home.is_dir())
-                    self.helper["finish_parallel_tests"](proc, started)
-                    self.assertFalse(test_home.exists())
-
-        self.assertEqual(len(observed), 4)
-        for invocation in observed:
-            self.assertEqual(invocation["cwd"], repo)
-            self.assertEqual(invocation["env"], sanitized_env)
-            self.assertEqual(invocation["stderr"], subprocess.PIPE)
-            self.assertTrue(invocation["text"])
-            if os.name == "nt":
-                self.assertEqual(invocation["creationflags"], subprocess.CREATE_NEW_PROCESS_GROUP)
-            else:
-                self.assertTrue(invocation["start_new_session"])
-        self.assertTrue(observed[0]["shell"])
-        self.assertTrue(observed[1]["shell"])
-        self.assertNotIn("shell", observed[2])
-        self.assertNotIn("shell", observed[3])
-        self.assertEqual(registered, unregistered)
-        self.assertEqual(len(registered), 4)
-
-    def test_parallel_test_finish_does_not_wait_for_inherited_stderr_pipe(
-        self,
-    ) -> None:
-        release = threading.Event()
-        stderr_thread = threading.Thread(target=release.wait, daemon=True)
-        stderr_thread.start()
-        try:
-            with tempfile.TemporaryDirectory() as tempdir:
-                test_home = Path(tempdir) / "test-home"
-                test_home.mkdir()
-                proc = mock.Mock()
-                proc.returncode = 0
-                proc.wait.return_value = 0
-                proc.poll.return_value = 0
-                setattr(proc, "_autoreview_test_home", test_home)
-                setattr(proc, "_autoreview_stderr_thread", stderr_thread)
-
-                started = time.time()
-                before = time.monotonic()
-                with mock.patch.dict(
-                    self.helper["finish_parallel_tests"].__globals__,
-                    {
-                        "terminate_process_group": lambda proc: None,
-                        "unregister_owned_process": lambda proc: None,
-                    },
-                ):
-                    result = self.helper["finish_parallel_tests"](proc, started)
-                elapsed = time.monotonic() - before
-
-                self.assertEqual(result, 0)
-                self.assertLess(elapsed, 1)
-                self.assertFalse(test_home.exists())
-        finally:
-            release.set()
-            stderr_thread.join(timeout=1)
 
     def test_terminate_process_group_uses_windows_process_api(self) -> None:
         proc = mock.Mock(pid=1234)
@@ -5686,7 +5531,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
         ):
             self.assertEqual(self.helper["main"](), 130)
 
-    def test_source_tree_snapshot_detects_parallel_test_mutations(self) -> None:
+    def test_source_tree_snapshot_detects_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             source = repo / "source.txt"
@@ -5828,53 +5673,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
 
     @unittest.skipIf(os.name == "nt", "the true command is POSIX-only")
-    def test_cli_parallel_tests_supports_unborn_repository(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            source = repo / "source.txt"
-            source.write_text("staged\n", encoding="utf-8")
-            git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
-                root / "codex",
-                self.helper["fake_codex_script"](),
-            )
-            record_path = root / "record.json"
-            env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
-            env.update(
-                {
-                    "AUTOREVIEW_FAKE_RECORD": str(record_path),
-                    "HOME": str(root),
-                    "USERPROFILE": str(root),
-                }
-            )
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--mode",
-                    "local",
-                    "--engine",
-                    "codex",
-                    "--codex-bin",
-                    str(codex_bin),
-                    "--parallel-tests",
-                    "true",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("autoreview clean", result.stdout)
-
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_cli_detects_source_mutation_without_parallel_tests(self) -> None:
+    def test_cli_detects_source_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
@@ -5883,9 +5683,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             git(repo, "add", "source.txt")
             git(repo, "commit", "-qm", "initial")
             source.write_text("review me\n", encoding="utf-8")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             record_path = root / "record.json"
             env = os.environ.copy()
@@ -6008,127 +5808,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 before,
             )
 
-    def test_trusted_maintainer_testbox_preserves_only_credentials(self) -> None:
-        old = os.environ.copy()
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            isolated_home = root / "test-home"
-            host_home = root / "host-home"
-            rustup_home = host_home / ".rustup"
-            rustup_home.mkdir(parents=True)
-            blacksmith_home = host_home / ".blacksmith"
-            blacksmith_home.mkdir()
-            blacksmith_credentials = blacksmith_home / "credentials"
-            blacksmith_credentials.write_bytes(b"test-blacksmith-credentials")
-            (blacksmith_home / "unrelated-state").write_text(
-                "do not copy",
-                encoding="utf-8",
-            )
-            local_bin = repo / ".venv" / "bin"
-            local_bin.mkdir(parents=True)
-            try:
-                os.environ["PATH"] = f"{local_bin}{os.pathsep}/usr/bin"
-                os.environ["CI"] = "1"
-                os.environ["GRADLE_USER_HOME"] = "/host/gradle"
-                os.environ["HOME"] = str(host_home)
-                os.environ["JAVA_HOME"] = "/opt/jdk"
-                os.environ["JAVA_TOOL_OPTIONS"] = "-javaagent:/host/unsafe.jar"
-                os.environ["NODE_ENV"] = "test"
-                os.environ["OPENCLAW_TESTBOX"] = "1"
-                os.environ["PROJECT_FEATURE_MODE"] = "strict"
-                os.environ["GH_CONFIG_DIR"] = "/host/gh"
-                os.environ["CLOUDSDK_CONFIG"] = "/host/gcloud"
-                os.environ["XDG_CONFIG_HOME"] = "/host/xdg"
-                os.environ["GITHUB_TOKEN"] = "test-token-placeholder"
-                os.environ["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"] = (
-                    "/host/aws-token"
-                )
-                os.environ["AZURE_FEDERATED_TOKEN_FILE"] = "/host/azure-token"
-                os.environ["CI_JOB_JWT"] = "header.payload.signature"
-                os.environ["DOCKER_AUTH_CONFIG"] = '{"auths":{"registry":{}}}'
-                os.environ["PGPASSFILE"] = "/host/pgpass"
-                os.environ["PGPASSWORD"] = "short-password"
-                os.environ["REDISCLI_AUTH"] = "short-password"
-                os.environ["BASH_FUNC_testcmd%%"] = "() { echo injected; }"
-                os.environ["SHELLOPTS"] = "xtrace"
-                os.environ["NODE_OPTIONS"] = "--require=/tmp/unsafe.js"
-                os.environ["SERVICE_URL"] = (
-                    "https://review-user:review-password@example.invalid/api"
-                )
-                os.environ["UNRELATED_VALUE"] = "ghp_" + "A" * 24
-
-                env = self.helper["safe_test_env"](repo, isolated_home)
-
-                self.assertEqual(env["PATH"], os.environ["PATH"])
-                self.assertEqual(env["CI"], "1")
-                self.assertEqual(
-                    env["GRADLE_USER_HOME"],
-                    str((isolated_home / ".gradle").resolve()),
-                )
-                self.assertEqual(env["JAVA_HOME"], "/opt/jdk")
-                self.assertEqual(
-                    env["JAVA_TOOL_OPTIONS"],
-                    self.helper["quote_java_tool_option"](
-                        f"-Duser.home={isolated_home.resolve()}"
-                    ),
-                )
-                self.assertEqual(env["NODE_ENV"], "test")
-                self.assertEqual(env["OPENCLAW_TESTBOX"], "1")
-                isolated_blacksmith = isolated_home / ".blacksmith"
-                self.assertEqual(
-                    (isolated_blacksmith / "credentials").read_bytes(),
-                    b"test-blacksmith-credentials",
-                )
-                self.assertFalse(
-                    (isolated_blacksmith / "unrelated-state").exists()
-                )
-                if os.name != "nt":
-                    self.assertEqual(
-                        stat.S_IMODE(
-                            (isolated_blacksmith / "credentials").stat().st_mode
-                        ),
-                        0o600,
-                    )
-                self.assertNotIn("PROJECT_FEATURE_MODE", env)
-                self.assertEqual(env["HOME"], str(isolated_home.resolve()))
-                self.assertNotIn("CARGO_HOME", env)
-                self.assertEqual(env["RUSTUP_HOME"], str(rustup_home.resolve()))
-                self.assertEqual(
-                    env["XDG_CONFIG_HOME"],
-                    str(isolated_home.resolve() / ".config"),
-                )
-                self.assertNotIn("GH_CONFIG_DIR", env)
-                self.assertNotIn("CLOUDSDK_CONFIG", env)
-                self.assertNotIn("GITHUB_TOKEN", env)
-                self.assertNotIn("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", env)
-                self.assertNotIn("AZURE_FEDERATED_TOKEN_FILE", env)
-                self.assertNotIn("CI_JOB_JWT", env)
-                self.assertNotIn("DOCKER_AUTH_CONFIG", env)
-                self.assertNotIn("PGPASSFILE", env)
-                self.assertNotIn("PGPASSWORD", env)
-                self.assertNotIn("REDISCLI_AUTH", env)
-                self.assertNotIn("BASH_FUNC_testcmd%%", env)
-                self.assertNotIn("SHELLOPTS", env)
-                self.assertNotIn("NODE_OPTIONS", env)
-                self.assertNotIn("SERVICE_URL", env)
-                self.assertNotIn("UNRELATED_VALUE", env)
-
-                os.environ.pop("HOME")
-                os.environ["USERPROFILE"] = str(host_home)
-                windows_env = self.helper["safe_test_env"](
-                    repo,
-                    root / "windows-test-home",
-                )
-                self.assertNotIn("CARGO_HOME", windows_env)
-                self.assertEqual(
-                    windows_env["RUSTUP_HOME"],
-                    str(rustup_home.resolve()),
-                )
-            finally:
-                os.environ.clear()
-                os.environ.update(old)
-
     def test_installed_java_rejects_launcher_without_runtime(self) -> None:
         launcher = "/usr/bin/java"
         unavailable = subprocess.CompletedProcess([launcher, "-version"], 1)
@@ -6137,86 +5816,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             mock.patch("subprocess.run", return_value=unavailable),
         ):
             self.assertIsNone(installed_java())
-
-    def test_parallel_test_environment_isolates_jvm_user_home(self) -> None:
-        java = installed_java()
-        if java is None:
-            self.skipTest("a usable Java runtime is not installed")
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            isolated_home = root / "test home"
-            env = self.helper["safe_test_env"](repo, isolated_home)
-
-            result = subprocess.run(
-                [java, "-XshowSettings:properties", "-version"],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            user_home = next(
-                (
-                    line.split("=", 1)[1].strip()
-                    for line in result.stderr.splitlines()
-                    if line.strip().startswith("user.home =")
-                ),
-                None,
-            )
-            self.assertEqual(user_home, str(isolated_home.resolve()))
-
-    def test_parallel_test_stderr_relay_hides_only_our_java_banner(self) -> None:
-        option = self.helper["quote_java_tool_option"](
-            "-Duser.home=/tmp/test home"
-        )
-        stream = io.StringIO(
-            f"Picked up JAVA_TOOL_OPTIONS: {option}\n"
-            "ordinary stderr\n"
-            f"Picked up JAVA_TOOL_OPTIONS: {option} -Dextra=true\n"
-        )
-        output = io.StringIO()
-
-        with mock.patch("sys.stderr", output):
-            self.helper["relay_parallel_test_stderr"](stream, option)
-
-        self.assertEqual(
-            output.getvalue(),
-            "ordinary stderr\n"
-            f"Picked up JAVA_TOOL_OPTIONS: {option} -Dextra=true\n",
-        )
-
-    def test_java_tool_option_quote_round_trips_special_paths(self) -> None:
-        java = installed_java()
-        if java is None:
-            self.skipTest("a usable Java runtime is not installed")
-        names = ["space home", "apostrophe's home"]
-        if os.name != "nt":
-            names.append('double"quote home')
-        for name in names:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as tempdir:
-                home = Path(tempdir) / name
-                home.mkdir()
-                env = os.environ.copy()
-                env["JAVA_TOOL_OPTIONS"] = self.helper["quote_java_tool_option"](
-                    f"-Duser.home={home}"
-                )
-                result = subprocess.run(
-                    [java, "-XshowSettings:properties", "-version"],
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
-                    check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"user.home = {home}", result.stderr)
 
     def test_safe_proxy_url_accepts_credential_free_formats(self) -> None:
         for value in (
@@ -6266,52 +5865,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.helper["safe_temp_root"](repo)
 
     @unittest.skipIf(os.name == "nt", "POSIX Testbox temp-root behavior")
-    def test_testbox_parallel_test_temp_root_stays_within_socket_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            long_temp = root / ("macos-temp-root-" + "x" * 96)
-            long_temp.mkdir()
-
-            with mock.patch.object(
-                tempfile,
-                "gettempdir",
-                return_value=str(long_temp),
-            ), mock.patch.dict(
-                os.environ,
-                {"OPENCLAW_TESTBOX": "1"},
-            ):
-                selected = self.helper["parallel_test_temp_root"](repo)
-
-            self.assertEqual(selected, Path("/tmp").resolve())
-            socket_path = (
-                selected
-                / ("autoreview-test-home-" + "x" * 8)
-                / ".blacksmith"
-                / "c"
-                / "6d146d2f25180c1d.sock"
-            )
-            self.assertLess(len(os.fsencode(socket_path)), 104)
-
-    def test_parallel_test_temp_root_keeps_configured_root_without_testbox(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            configured_temp = root / "configured-temp"
-            configured_temp.mkdir()
-
-            with mock.patch.object(
-                tempfile,
-                "gettempdir",
-                return_value=str(configured_temp),
-            ), mock.patch.dict(
-                os.environ,
-                {"OPENCLAW_TESTBOX": "0"},
-            ):
-                selected = self.helper["parallel_test_temp_root"](repo)
-
-            self.assertEqual(selected, configured_temp.resolve())
-
     def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
         args = argparse.Namespace(
             claude_bin="claude",
@@ -6895,11 +6448,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(root)
             (repo / "tools").mkdir()
             (root / "trusted").mkdir()
-            repo_bin = self.helper["write_executable"](
+            repo_bin = write_executable(
                 repo / "tools" / "codex",
                 "#!/bin/sh\nexit 0\n",
             )
-            external_bin = self.helper["write_executable"](
+            external_bin = write_executable(
                 root / "trusted" / "codex",
                 "#!/bin/sh\nexit 0\n",
             )
@@ -7989,7 +7542,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 label="stream-test",
                 heartbeat_seconds=60,
                 stream_display=None,
-                resolve_root=Path.cwd(),
             )
 
         self.assertIn(control, result.stdout)
@@ -8213,7 +7765,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(root)
             fake_bin_dir = root / "bin"
             fake_bin_dir.mkdir()
-            self.helper["write_executable"](
+            write_executable(
                 fake_bin_dir / "codex",
                 "#!/usr/bin/env python3\nraise SystemExit(0)\n",
             )
@@ -8242,9 +7794,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             # The dry-run OK path now also requires trufflehog to resolve
             # (see run_trufflehog_preflight), so stage a fake one instead
@@ -8287,9 +7839,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8339,9 +7891,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             env["PATH"] = path_excluding_command("trufflehog")
@@ -8502,9 +8054,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
             git(repo, "commit", "-q", "-m", "seed")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8544,9 +8096,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
-            pi_bin = self.helper["write_executable"](
+            pi_bin = write_executable(
                 root / "pi",
-                self.helper["fake_pi_script"](),
+                fake_pi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8583,9 +8135,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            pi_bin = self.helper["write_executable"](
+            pi_bin = write_executable(
                 root / "pi",
-                self.helper["fake_pi_script"](),
+                fake_pi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8622,9 +8174,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8661,9 +8213,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8709,9 +8261,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8761,9 +8313,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             source_share = root / "kimi-home"
             source_share.mkdir()
@@ -8814,9 +8366,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             source_share = root / "kimi-home"
             source_share.mkdir()
@@ -8863,9 +8415,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             source_share = root / "kimi-home"
             source_share.mkdir()
@@ -8914,9 +8466,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            claude_bin = self.helper["write_executable"](
+            claude_bin = write_executable(
                 root / "claude",
-                self.helper["fake_claude_script"](),
+                fake_claude_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -8965,9 +8517,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            kimi_bin = self.helper["write_executable"](
+            kimi_bin = write_executable(
                 root / "kimi",
-                self.helper["fake_kimi_script"](),
+                fake_kimi_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -9020,9 +8572,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -9065,9 +8617,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             git(repo, "add", "source.txt")
             prompt_file = repo / "prompt.md"
             prompt_file.write_text("Focus on error handling.\n", encoding="utf-8")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -9107,9 +8659,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             source = repo / "source.txt"
             source.write_text("staged\n", encoding="utf-8")
             git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
+            codex_bin = write_executable(
                 root / "codex",
-                self.helper["fake_codex_script"](),
+                fake_codex_script(),
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
@@ -9138,22 +8690,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("inputs: FAILED", result.stdout)
             self.assertIn("missing-dataset.json", result.stdout)
-
-    def test_self_test_shortcut_runs_deterministic_checks(self) -> None:
-        command = [str(SCRIPT), "--self-test"]
-        if os.name == "nt":
-            command = [sys.executable, str(SCRIPT), "--self-test"]
-        result = subprocess.run(
-            command,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("autoreview engine isolation self-test: ok", result.stdout)
-
 
 if __name__ == "__main__":
     unittest.main()

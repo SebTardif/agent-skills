@@ -836,9 +836,14 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         self.assertEqual(args.kimi_bin, "/tmp/trusted-kimi")
 
     def test_kimi_reviewer_disables_tools(self) -> None:
-        args = AUTOREVIEW.reviewer_test_args(
+        args = argparse.Namespace(
             engine="kimi",
+            model=None,
             thinking=["on"],
+            fallback_model=None,
+            codex_config=None,
+            codex_speed=None,
+            tools=True,
         )
 
         reviewer = AUTOREVIEW.reviewer_args(args)[0]
@@ -1241,12 +1246,6 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(SystemExit, "result was not structured JSON"):
             AUTOREVIEW.extract_json(json.dumps(payload))
-
-    def test_retry_filter_only_matches_parse_failures(self) -> None:
-        self.assertTrue(AUTOREVIEW.is_structured_output_failure("review engine returned non-JSON output: nope"))
-        self.assertTrue(AUTOREVIEW.is_structured_output_failure("review engine result was not structured JSON:\nnope"))
-        self.assertFalse(AUTOREVIEW.is_structured_output_failure("review JSON missing required key: findings"))
-        self.assertFalse(AUTOREVIEW.is_structured_output_failure("finding 0 has invalid priority"))
 
 if __name__ == "__main__":
     unittest.main()
