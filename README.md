@@ -182,9 +182,6 @@ python3 skills/autoreview/scripts/autoreview --self-test-config-defaults
 python3 skills/autoreview/scripts/autoreview --self-test-fallback-scope
 python3 skills/autoreview/scripts/autoreview --self-test-engine-isolation
 python3 skills/autoreview/scripts/autoreview --self-test-json-array-parser
-python3 skills/autoreview/scripts/autoreview --self-test-opencode-jsonl-parser
-python3 skills/autoreview/scripts/autoreview --self-test-opencode-isolation
-python3 skills/autoreview/scripts/autoreview --self-test-cursor-jsonl-parser
 python3 -m unittest skills/autoreview/scripts/autoreview_test.py skills.autoreview.tests.test_autoreview_hardening
 node --check skills/agent-transcript/scripts/agent-transcript
 node --check skills/beam/scripts/beam

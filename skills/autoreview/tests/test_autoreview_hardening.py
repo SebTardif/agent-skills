@@ -838,9 +838,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_powershell_harness_exposes_runnable_engines_only(self) -> None:
         harness = SCRIPT.with_name("test-review-harness.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("[ValidateSet('codex', 'claude', 'pi', 'kimi')]", harness)
-        for disabled_engine in ("droid", "copilot", "opencode", "cursor"):
-            self.assertNotIn(f"'{disabled_engine}'", harness)
+        self.assertIn("[ValidateSet('codex', 'claude', 'amp', 'pi', 'kimi')]", harness)
 
     def test_local_bundle_omits_sensitive_untracked_file_without_blocking(self) -> None:
         for rel in (".env", "tokens/session.dat", "secrets/local.py"):
@@ -4979,11 +4977,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 argparse.Namespace(engine="claude", tools=True),
                 True,
             )
-        with self.assertRaisesRegex(SystemExit, "droid engine refused truncated review input"):
-            self.helper["ensure_reviewer_input_complete"](
-                argparse.Namespace(engine="droid", tools=False),
-                True,
-            )
         with self.assertRaisesRegex(SystemExit, "kimi engine refused truncated review input"):
             self.helper["ensure_reviewer_input_complete"](
                 argparse.Namespace(engine="kimi", tools=False),
@@ -5143,18 +5136,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "invalid boolean environment value"):
                 self.helper["env_truthy"]("AUTOREVIEW_TEST_BOOL")
 
-    def test_droid_fails_closed_without_complete_isolation(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            (repo / "AGENTS.md").write_text("hostile instructions\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(
-                SystemExit,
-                r"droid engine is unavailable.*use codex, claude, pi, or kimi",
-            ) as error:
-                self.helper["run_droid"](argparse.Namespace(), repo, "prompt")
-            self.assertNotIn("opencode", str(error.exception))
-
     def test_prompt_file_keeps_recoverable_repo_path(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -5190,62 +5171,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     "",
                     "",
                 )
-
-    def test_cursor_refuses_global_mcp_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            global_mcp = root / ".cursor" / "mcp.json"
-            global_mcp.parent.mkdir()
-            global_mcp.write_text("{}\n", encoding="utf-8")
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-            )
-
-            with mock.patch.object(Path, "home", return_value=root), mock.patch.dict(
-                os.environ,
-                {"HOME": str(root), "USERPROFILE": str(root)},
-            ):
-                with self.assertRaisesRegex(SystemExit, "cursor engine is unavailable"):
-                    self.helper["run_cursor"](args, repo, "prompt")
-
-    def test_cursor_refuses_user_level_hooks(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            settings = root / ".claude" / "settings.json"
-            settings.parent.mkdir()
-            settings.write_text('{"hooks":{"PreToolUse":[{"command":"unsafe"}]}}\n', encoding="utf-8")
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-            )
-
-            with mock.patch.object(Path, "home", return_value=root), mock.patch.dict(
-                os.environ,
-                {"HOME": str(root), "USERPROFILE": str(root)},
-            ):
-                with self.assertRaisesRegex(SystemExit, "cursor engine is unavailable"):
-                    self.helper["run_cursor"](args, repo, "prompt")
-
-            settings.write_text('{"permissions":{"allow":["Read(**)"]}}\n', encoding="utf-8")
-            with mock.patch.object(Path, "home", return_value=root), mock.patch.dict(
-                os.environ,
-                {"HOME": str(root), "USERPROFILE": str(root)},
-            ):
-                self.assertEqual(self.helper["cursor_global_hook_paths"](), [])
-
-            settings.write_text('{"enabledPlugins":{"review-hooks@example":true}}\n', encoding="utf-8")
-            with mock.patch.object(Path, "home", return_value=root), mock.patch.dict(
-                os.environ,
-                {"HOME": str(root), "USERPROFILE": str(root)},
-            ):
-                self.assertEqual(self.helper["cursor_global_hook_paths"](), [settings])
 
     def test_read_text_truncates_without_scanning_tail(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -5741,33 +5666,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
         after = signal_module.getsignal(signal_module.SIGTERM)
         self.assertIs(after, before)
 
-    def test_deferred_owned_process_signals_supports_panel_worker_threads(self) -> None:
-        entered = threading.Event()
-        release = threading.Event()
-        errors: list[BaseException] = []
-
-        def worker() -> None:
-            try:
-                with self.helper["deferred_owned_process_signals"]():
-                    entered.set()
-                    release.wait(timeout=2)
-            except BaseException as exc:
-                errors.append(exc)
-
-        thread = threading.Thread(target=worker)
-        thread.start()
-        self.assertTrue(entered.wait(timeout=2))
-        registry_lock = self.helper["_OWNED_PROCESS_LOCK"]
-        acquired = registry_lock.acquire(blocking=False)
-        if acquired:
-            registry_lock.release()
-        release.set()
-        thread.join(timeout=2)
-
-        self.assertFalse(thread.is_alive())
-        self.assertFalse(acquired, "worker did not guard the spawn/register window")
-        self.assertEqual(errors, [])
-
     def test_engine_interrupted_is_not_swallowed_by_except_system_exit(self) -> None:
         # Regression: EngineInterrupted used to subclass SystemExit, so
         # internal `except SystemExit` guards like read_text_with_status's
@@ -5902,106 +5800,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "review\n",
             )
             self.assertFalse(os.path.samefile(tracked, outside))
-
-    def test_partial_panel_failure_output_is_terminal_escaped(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            reviewers = [
-                argparse.Namespace(
-                    engine="codex",
-                    model=None,
-                    fallback_model=None,
-                    thinking=None,
-                ),
-                argparse.Namespace(
-                    engine="claude",
-                    model=None,
-                    fallback_model=None,
-                    thinking=None,
-                ),
-            ]
-            args = argparse.Namespace(
-                allow_partial_panel=True,
-                require_finding=[],
-            )
-            report = {
-                "findings": [],
-                "overall_correctness": "patch is correct",
-                "overall_explanation": "clean",
-                "overall_confidence": 0.9,
-            }
-
-            def run_reviewer(reviewer: argparse.Namespace, *_args: object) -> object:
-                if reviewer.engine == "claude":
-                    raise RuntimeError(
-                        "\x1b]8;;https://example.invalid\x07click"
-                        "\x1b]8;;\x07"
-                    )
-                return report
-
-            stdout = io.StringIO()
-            with (
-                mock.patch.dict(
-                    self.helper["run_panel"].__globals__,
-                    {"run_reviewer": run_reviewer},
-                ),
-                contextlib.redirect_stdout(stdout),
-            ):
-                self.helper["run_panel"](
-                    args,
-                    reviewers,
-                    repo,
-                    "prompt",
-                    set(),
-                    False,
-                )
-
-            output = stdout.getvalue()
-            self.assertNotIn("\x1b", output)
-            self.assertNotIn("\x07", output)
-            self.assertIn("\\x1b]8;;", output)
-            self.assertIn("\\x07", output)
-
-    def test_fatal_panel_failure_output_is_terminal_escaped(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            reviewers = [
-                argparse.Namespace(
-                    engine="codex",
-                    model=None,
-                    fallback_model=None,
-                    thinking=None,
-                )
-            ]
-            args = argparse.Namespace(
-                allow_partial_panel=False,
-                require_finding=[],
-            )
-
-            def run_reviewer(*_args: object) -> object:
-                raise RuntimeError("\x1b]8;;https://example.invalid\x07click")
-
-            with (
-                mock.patch.dict(
-                    self.helper["run_panel"].__globals__,
-                    {"run_reviewer": run_reviewer},
-                ),
-                self.assertRaises(SystemExit) as error,
-            ):
-                self.helper["run_panel"](
-                    args,
-                    reviewers,
-                    repo,
-                    "prompt",
-                    set(),
-                    False,
-                )
-
-            message = str(error.exception)
-            self.assertNotIn("\x1b", message)
-            self.assertNotIn("\x07", message)
-            self.assertIn("\\x1b]8;;", message)
-            self.assertIn("\\x07", message)
 
     def test_source_tree_snapshot_supports_staged_files_before_first_commit(
         self,
@@ -6694,12 +6492,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.environ["GITLAB_TOKEN"] = "test-token-placeholder"
                 os.environ["NODE_OPTIONS"] = "--require=/tmp/unsafe.js"
                 os.environ["GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES"] = "1"
-                os.environ["XDG_DATA_HOME"] = str(root / "opencode-auth")
-
-                for engine in ("opencode", "pi"):
-                    with self.subTest(engine=engine):
-                        env = self.helper["safe_engine_env"](repo, engine=engine)
-                        for key in (
+                env = self.helper["safe_engine_env"](repo, engine="pi")
+                for key in (
                             "AWS_ROLE_ARN",
                             "AWS_CONTAINER_AUTHORIZATION_TOKEN",
                             "AWS_CONTAINER_CREDENTIALS_FULL_URI",
@@ -6721,35 +6515,18 @@ class AutoreviewHardeningTests(unittest.TestCase):
                             "SNOWFLAKE_CORTEX_TOKEN",
                             "AZURE_RESOURCE_NAME",
                             "ANTHROPIC_OAUTH_TOKEN",
-                        ):
-                            self.assertEqual(env[key], os.environ[key])
-                        self.assertNotIn("NODE_OPTIONS", env)
-                        self.assertNotIn("NPM_TOKEN", env)
-                        self.assertNotIn("SENTRY_API_KEY", env)
-                        self.assertNotIn("SENTRY_AUTH_TOKEN", env)
-                        self.assertNotIn(
-                            "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
-                            env,
-                        )
-                        if engine == "opencode":
-                            self.assertEqual(
-                                env["DIGITALOCEAN_ACCESS_TOKEN"],
-                                os.environ["DIGITALOCEAN_ACCESS_TOKEN"],
-                            )
-                            self.assertEqual(
-                                env["GITLAB_TOKEN"],
-                                os.environ["GITLAB_TOKEN"],
-                            )
-                            self.assertEqual(
-                                env["XDG_DATA_HOME"],
-                                str(root / "opencode-auth"),
-                            )
-                        else:
-                            self.assertNotIn("DIGITALOCEAN_ACCESS_TOKEN", env)
-                            self.assertNotIn("GITLAB_TOKEN", env)
-                            self.assertEqual(env["PI_OFFLINE"], "1")
-                            self.assertEqual(env["PI_SKIP_VERSION_CHECK"], "1")
-                            self.assertEqual(env["PI_TELEMETRY"], "0")
+                ):
+                    self.assertEqual(env[key], os.environ[key])
+                self.assertNotIn("NODE_OPTIONS", env)
+                self.assertNotIn("NPM_TOKEN", env)
+                self.assertNotIn("SENTRY_API_KEY", env)
+                self.assertNotIn("SENTRY_AUTH_TOKEN", env)
+                self.assertNotIn("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", env)
+                self.assertNotIn("DIGITALOCEAN_ACCESS_TOKEN", env)
+                self.assertNotIn("GITLAB_TOKEN", env)
+                self.assertEqual(env["PI_OFFLINE"], "1")
+                self.assertEqual(env["PI_SKIP_VERSION_CHECK"], "1")
+                self.assertEqual(env["PI_TELEMETRY"], "0")
 
                 claude_env = self.helper["safe_engine_env"](repo, engine="claude")
                 for key in (
@@ -6793,17 +6570,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     "CORP_LLM_API_KEY,CORP_AUTH_TOKEN"
                 )
 
-                for engine in ("opencode", "pi"):
-                    env = self.helper["safe_engine_env"](repo, engine=engine)
-                    self.assertEqual(
-                        env["CORP_LLM_API_KEY"],
-                        os.environ["CORP_LLM_API_KEY"],
-                    )
-                    self.assertEqual(
-                        env["CORP_AUTH_TOKEN"],
-                        os.environ["CORP_AUTH_TOKEN"],
-                    )
-                    self.assertNotIn("AUTOREVIEW_PROVIDER_ENV_ALLOW", env)
+                env = self.helper["safe_engine_env"](repo, engine="pi")
+                self.assertEqual(env["CORP_LLM_API_KEY"], os.environ["CORP_LLM_API_KEY"])
+                self.assertEqual(env["CORP_AUTH_TOKEN"], os.environ["CORP_AUTH_TOKEN"])
+                self.assertNotIn("AUTOREVIEW_PROVIDER_ENV_ALLOW", env)
 
                 os.environ["AUTOREVIEW_PROVIDER_ENV_ALLOW"] = "NODE_OPTIONS"
                 with self.assertRaisesRegex(
@@ -6847,32 +6617,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.chdir(old_cwd)
                 os.environ.clear()
                 os.environ.update(old_env)
-
-    def test_opencode_rejects_repo_local_xdg_auth_store(self) -> None:
-        old = os.environ.copy()
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            try:
-                os.environ["XDG_DATA_HOME"] = str(repo / ".opencode-data")
-                os.environ["AWS_CONFIG_FILE"] = str(repo / ".aws-config")
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(
-                    repo / "provider-credentials.json"
-                )
-                os.environ["NODE_EXTRA_CA_CERTS"] = str(repo / "ca.pem")
-                os.environ["SSL_CERT_FILE"] = str(repo / "tls-ca.pem")
-                os.environ["SSL_CERT_DIR"] = os.pathsep.join(
-                    (str(repo.parent / "tls-ca"), str(repo / "tls-ca")),
-                )
-                env = self.helper["safe_engine_env"](repo, engine="opencode")
-                self.assertNotIn("XDG_DATA_HOME", env)
-                self.assertNotIn("AWS_CONFIG_FILE", env)
-                self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", env)
-                self.assertNotIn("NODE_EXTRA_CA_CERTS", env)
-                self.assertNotIn("SSL_CERT_FILE", env)
-                self.assertNotIn("SSL_CERT_DIR", env)
-            finally:
-                os.environ.clear()
-                os.environ.update(old)
 
     def test_engines_reject_repo_local_config_roots(self) -> None:
         old = os.environ.copy()
@@ -7100,51 +6844,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
-
-    def test_opencode_web_search_preserves_explicit_exa_opt_in(self) -> None:
-        old = os.environ.copy()
-        try:
-            os.environ["OPENCODE_ENABLE_EXA"] = "1"
-            enabled = self.helper["opencode_review_env"](True)
-            disabled = self.helper["opencode_review_env"](False)
-            self.assertEqual(enabled["OPENCODE_ENABLE_EXA"], "1")
-            self.assertNotIn("OPENCODE_ENABLE_EXA", disabled)
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
-
-    def test_opencode_isolation_self_test_does_not_forward_unrelated_secret(self) -> None:
-        self_test = self.helper["self_test_opencode_real_project_isolation"]
-        with tempfile.TemporaryDirectory() as tempdir:
-            if os.name == "nt":
-                fake = Path(tempdir) / "opencode.cmd"
-                fake.write_text(
-                    "@echo off\r\n"
-                    "if defined UNRELATED_CREDENTIAL_SENTINEL exit /b 86\r\n"
-                    'if "%OPENCODE_DISABLE_PROJECT_CONFIG%"=="1" (\r\n'
-                    "  echo {}\r\n"
-                    ") else (\r\n"
-                    "  echo HOSTILE_SENTINEL_DOT_OPENCODE_AGENT HOSTILE_MODEL_SELECTION_SENTINEL\r\n"
-                    ")\r\n"
-                )
-            else:
-                fake = Path(tempdir) / "opencode"
-                fake.write_text(
-                    "#!/usr/bin/env python3\n"
-                    "import os\n"
-                    "if 'UNRELATED_CREDENTIAL_SENTINEL' in os.environ:\n"
-                    "    raise SystemExit(86)\n"
-                    "if os.environ.get('OPENCODE_DISABLE_PROJECT_CONFIG') == '1':\n"
-                    "    print('{}')\n"
-                    "else:\n"
-                    "    print('HOSTILE_SENTINEL_DOT_OPENCODE_AGENT HOSTILE_MODEL_SELECTION_SENTINEL')\n"
-                )
-            fake.chmod(0o755)
-            with mock.patch.dict(
-                os.environ,
-                {"UNRELATED_CREDENTIAL_SENTINEL": realistic_secret_value()},
-            ):
-                self_test(argparse.Namespace(opencode_bin=str(fake)))
 
     def test_codex_isolation_restricts_tool_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -7541,29 +7240,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     "evidence.txt",
                     "--dataset",
                 )
-
-    def test_copilot_fails_closed_without_repo_only_read_sandbox(self) -> None:
-        args = argparse.Namespace(
-            copilot_bin="copilot",
-            thinking=None,
-            tools=True,
-            model=None,
-            web_search=False,
-            stream_engine_output=False,
-        )
-
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            with self.assertRaisesRegex(
-                SystemExit,
-                r"ignored repository secrets; use codex, claude, pi, or kimi",
-            ) as error:
-                self.helper["run_copilot"](
-                    args,
-                    repo,
-                    "Repository root: .\n\nprompt",
-                )
-            self.assertNotIn("opencode", str(error.exception))
 
     def test_claude_inventory_is_bundle_and_web_only(self) -> None:
         args = argparse.Namespace(
@@ -8519,14 +8195,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             {content[start:end] for start, end in spans},
         )
 
-    def test_resolve_engine_binary_reports_hardcoded_unavailable_engines(self) -> None:
-        resolve_engine_binary = self.helper["resolve_engine_binary"]
-        for engine in ("droid", "copilot", "opencode", "cursor"):
-            reviewer = argparse.Namespace(engine=engine)
-            available, reason = resolve_engine_binary(reviewer, Path("."))
-            self.assertFalse(available)
-            self.assertIn(engine, reason)
-
     def test_resolve_engine_binary_rejects_codex_no_tools(self) -> None:
         # run_codex() unconditionally refuses --no-tools (see line ~10318);
         # the preflight must report that same rejection instead of reporting
@@ -8732,161 +8400,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertIn("--no-tools", result.stdout)
 
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_dry_run_flag_exits_nonzero_for_unsafe_codex_config_in_reviewer_list(self) -> None:
-        # codex_config_overrides() refuses capability-bearing --codex-config
-        # keys before run_codex() ever builds its command (see
-        # codex_command); resolve_engine_binary() must replay that same
-        # check for every reviewer in a --reviewers/--panel list, not just
-        # a single --engine codex run, so a dry run cannot report codex OK
-        # for a config override the real run would reject.
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            source = repo / "source.txt"
-            source.write_text("staged\n", encoding="utf-8")
-            git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
-                root / "codex",
-                self.helper["fake_codex_script"](),
-            )
-            claude_bin = self.helper["write_executable"](
-                root / "claude",
-                self.helper["fake_claude_script"](),
-            )
-            env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--mode",
-                    "local",
-                    "--reviewers",
-                    "codex,claude",
-                    "--codex-bin",
-                    str(codex_bin),
-                    "--claude-bin",
-                    str(claude_bin),
-                    "--codex-config",
-                    'mcp_servers.review.command="touch /tmp/owned"',
-                    "--dry-run",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertRegex(result.stdout, r"engine check: codex[^\n]* UNAVAILABLE")
-            self.assertIn("unsafe Codex config override refused", result.stdout)
-            self.assertIn("mcp_servers.review.command", result.stdout)
-            # The rest of the panel is unaffected: claude must still report OK.
-            self.assertRegex(result.stdout, r"engine check: claude[^\n]* OK\b")
-
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_dry_run_flag_exits_nonzero_for_invalid_codex_speed_in_reviewer_list(self) -> None:
-        # codex_speed_override() refuses an unrecognized AUTOREVIEW_CODEX_SPEED
-        # value before run_codex() ever builds its command; --codex-speed
-        # itself is argparse-choice-constrained, so the env var is the only
-        # way an invalid value reaches this check. resolve_engine_binary()
-        # must replay that same rejection for every reviewer in a
-        # --reviewers/--panel list.
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            source = repo / "source.txt"
-            source.write_text("staged\n", encoding="utf-8")
-            git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
-                root / "codex",
-                self.helper["fake_codex_script"](),
-            )
-            claude_bin = self.helper["write_executable"](
-                root / "claude",
-                self.helper["fake_claude_script"](),
-            )
-            env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
-            env["AUTOREVIEW_CODEX_SPEED"] = "warp"
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--mode",
-                    "local",
-                    "--reviewers",
-                    "codex,claude",
-                    "--codex-bin",
-                    str(codex_bin),
-                    "--claude-bin",
-                    str(claude_bin),
-                    "--dry-run",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertRegex(result.stdout, r"engine check: codex[^\n]* UNAVAILABLE")
-            self.assertIn("invalid Codex speed: warp", result.stdout)
-            self.assertRegex(result.stdout, r"engine check: claude[^\n]* OK\b")
-
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_dry_run_flag_exits_zero_for_valid_codex_config_in_reviewer_list(self) -> None:
-        # A safe --codex-config override must not be rejected by the same
-        # replayed check; the panel/reviewer-list dry-run path must keep
-        # reporting OK for configurations a real run would accept.
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            source = repo / "source.txt"
-            source.write_text("staged\n", encoding="utf-8")
-            git(repo, "add", "source.txt")
-            codex_bin = self.helper["write_executable"](
-                root / "codex",
-                self.helper["fake_codex_script"](),
-            )
-            claude_bin = self.helper["write_executable"](
-                root / "claude",
-                self.helper["fake_claude_script"](),
-            )
-            env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--mode",
-                    "local",
-                    "--reviewers",
-                    "codex,claude",
-                    "--codex-bin",
-                    str(codex_bin),
-                    "--claude-bin",
-                    str(claude_bin),
-                    "--codex-config",
-                    'service_tier="fast"',
-                    "--dry-run",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertRegex(result.stdout, r"engine check: codex[^\n]* OK\b")
-            self.assertRegex(result.stdout, r"engine check: claude[^\n]* OK\b")
-
     def test_dry_run_flag_exits_nonzero_when_engine_binary_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -8911,23 +8426,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("UNAVAILABLE", result.stdout)
-
-    def test_dry_run_flag_exits_nonzero_for_always_unavailable_engine(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), "--mode", "local", "--engine", "droid", "--dry-run"],
-                cwd=repo,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("droid", result.stdout)
             self.assertIn("UNAVAILABLE", result.stdout)
 
     def test_dry_run_flag_exits_nonzero_when_bundle_construction_fails(self) -> None:
