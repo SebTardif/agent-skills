@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fail closed when agent-transcript `find` or `html` walks more than 20,000 session files, instead of hanging on unbounded recursive discovery.
 - Partition oversized Autoreview evidence without dropping change context, keeping complete-input and per-pass credential scans within existing engine limits.
 - Preserve exact outgoing autoreview scan bytes on Windows instead of translating line endings.
 - Fix autoreview credential-source inclusion and scope-filtered results, preserving provider verdicts and rejected findings while documenting complete PR-plus-dirty review.

@@ -142,3 +142,62 @@ test("find labels explicit roots under trailing-slash CLAUDE_CONFIG_DIR as Claud
   assert.equal(matches[0].file, session);
   assert.equal(matches[0].agent, "claude");
 });
+
+test("find fails closed when session discovery exceeds the walk cap", () => {
+  const dir = tempDir();
+  const home = tempDir();
+  writeJsonl(path.join(dir, "a.jsonl"), [
+    { type: "user", message: { role: "user", content: "walk-cap-find-marker" } },
+  ]);
+  writeJsonl(path.join(dir, "b.jsonl"), [
+    { type: "user", message: { role: "user", content: "walk-cap-find-marker" } },
+  ]);
+
+  assert.throws(
+    () =>
+      run(
+        [
+          "find",
+          "--query",
+          "walk-cap-find-marker",
+          "--root",
+          dir,
+          "--since-days",
+          "1",
+          "--max-files",
+          "20",
+          "--max-discovery-files",
+          "1",
+        ],
+        { env: { ...process.env, HOME: home } },
+      ),
+    (error) => {
+      assert.match(String(error.stderr || ""), /session discovery exceeded its file limit/);
+      return true;
+    },
+  );
+});
+
+test("html fails closed when session discovery exceeds the walk cap", () => {
+  const dir = tempDir();
+  const home = tempDir();
+  writeJsonl(path.join(dir, "a.jsonl"), [
+    { type: "user", message: { role: "user", content: "walk-cap-html-marker" } },
+  ]);
+  writeJsonl(path.join(dir, "b.jsonl"), [
+    { type: "user", message: { role: "user", content: "walk-cap-html-marker" } },
+  ]);
+  const prs = path.join(dir, "prs.json");
+  fs.writeFileSync(prs, JSON.stringify([{ title: "walk-cap-html-marker", url: "https://example.com/pr/1" }]));
+
+  assert.throws(
+    () =>
+      run(["html", "--prs", prs, "--root", dir, "--since-days", "1", "--max-discovery-files", "1"], {
+        env: { ...process.env, HOME: home },
+      }),
+    (error) => {
+      assert.match(String(error.stderr || ""), /session discovery exceeded its file limit/);
+      return true;
+    },
+  );
+});
