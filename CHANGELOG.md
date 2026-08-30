@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bound agent-transcript JSONL reads to 8 MiB (head and tail) before parse, so render, preview, append-body, and html do not load multi-hundred-megabyte session files into memory.
 - Show Autoreview preparation progress, reuse captured bundle membership, and guard explicit evidence against content and path changes while preserving full-tree integrity checks.
 - Verify raw Git parents in Autoreview commit bundles, preserving true roots and refusing unsupported attribution from shallow boundaries, grafts, or misleading metadata.
 - Partition oversized Autoreview evidence without dropping change context, keeping complete-input and per-pass credential scans within existing engine limits.

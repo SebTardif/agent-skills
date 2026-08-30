@@ -142,3 +142,46 @@ test("find labels explicit roots under trailing-slash CLAUDE_CONFIG_DIR as Claud
   assert.equal(matches[0].file, session);
   assert.equal(matches[0].agent, "claude");
 });
+
+function oversizedSession(dir) {
+  const session = path.join(dir, "session.jsonl");
+  const pad = JSON.stringify({
+    type: "user",
+    message: { role: "user", content: `pad-${"x".repeat(80)}` },
+  });
+  const lines = [
+    JSON.stringify({ type: "user", message: { role: "user", content: "HEAD_READ_BOUND_MARKER" } }),
+    ...Array.from({ length: 40 }, () => pad),
+    JSON.stringify({ type: "user", message: { role: "user", content: "MIDDLE_READ_BOUND_MARKER" } }),
+    ...Array.from({ length: 40 }, () => pad),
+    JSON.stringify({ type: "user", message: { role: "user", content: "TAIL_READ_BOUND_MARKER" } }),
+  ];
+  fs.writeFileSync(session, `${lines.join("\n")}\n`);
+  return session;
+}
+
+test("render bounds oversized JSONL reads before parse", () => {
+  const dir = tempDir();
+  const session = oversizedSession(dir);
+
+  const output = run(["render", "--session", session, "--max-read-bytes", "400"]);
+  assert.match(output, /HEAD_READ_BOUND_MARKER/);
+  assert.match(output, /TAIL_READ_BOUND_MARKER/);
+  assert.doesNotMatch(output, /MIDDLE_READ_BOUND_MARKER/);
+});
+
+test("html bounds oversized JSONL reads before parse", () => {
+  const dir = tempDir();
+  const home = tempDir();
+  oversizedSession(dir);
+  const prs = path.join(dir, "prs.json");
+  fs.writeFileSync(prs, JSON.stringify([{ title: "HEAD_READ_BOUND_MARKER", url: "https://example.com/pr/1" }]));
+
+  const output = run(
+    ["html", "--prs", prs, "--root", dir, "--since-days", "1", "--min-score", "1", "--max-read-bytes", "400"],
+    { env: { ...process.env, HOME: home } },
+  );
+  assert.match(output, /HEAD_READ_BOUND_MARKER/);
+  assert.match(output, /TAIL_READ_BOUND_MARKER/);
+  assert.doesNotMatch(output, /MIDDLE_READ_BOUND_MARKER/);
+});

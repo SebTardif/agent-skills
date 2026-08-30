@@ -9,15 +9,16 @@ const MARKER_START = "<!-- agent-transcript:start -->";
 const MARKER_END = "<!-- agent-transcript:end -->";
 const DEFAULT_MAX_CHARS = 50000;
 const DEFAULT_ENTRY_MAX_CHARS = 6000;
+const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 
 function usage() {
   console.log(`Usage:
   agent-transcript find --query TEXT [--cwd PATH] [--since-days N] [--max-files N] [--root PATH...]
-  agent-transcript render --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N] [--title TEXT] [--url URL]
+  agent-transcript render --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N] [--max-read-bytes N] [--title TEXT] [--url URL]
   agent-transcript render-thread --thread-id ID [--out FILE] [--max-chars N] [--entry-max-chars N] [--title TEXT] [--url URL]
-  agent-transcript preview --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N] [--title TEXT] [--url URL]
-  agent-transcript append-body --body FILE --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N]
-  agent-transcript html --prs FILE [--out FILE] [--since-days N] [--min-score N] [--root PATH...] [--exclude-session FILE...]
+  agent-transcript preview --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N] [--max-read-bytes N] [--title TEXT] [--url URL]
+  agent-transcript append-body --body FILE --session FILE [--app-server] [--thread-id ID] [--out FILE] [--max-chars N] [--entry-max-chars N] [--max-read-bytes N]
+  agent-transcript html --prs FILE [--out FILE] [--since-days N] [--min-score N] [--max-read-bytes N] [--root PATH...] [--exclude-session FILE...]
 
 Local-only. No network calls.`);
 }
@@ -134,8 +135,17 @@ function walkJsonl(root, sinceMs, out = []) {
   return out;
 }
 
-function readJsonl(file, maxLines = 12000) {
-  const text = fs.readFileSync(file, "utf8");
+function transcriptReadLimit(options = {}) {
+  const value = options.maxReadBytes ?? options["max-read-bytes"] ?? MAX_TRANSCRIPT_BYTES;
+  const maxBytes = Number(value);
+  if (!Number.isFinite(maxBytes) || maxBytes < 1) {
+    throw new Error("--max-read-bytes must be a positive number");
+  }
+  return maxBytes;
+}
+
+function readJsonl(file, maxLines = 12000, maxBytes = MAX_TRANSCRIPT_BYTES) {
+  const text = readBoundedText(file, maxBytes);
   const lines = text.split(/\n+/).filter(Boolean).slice(0, maxLines);
   const rows = [];
   for (const line of lines) {
@@ -407,7 +417,7 @@ function expandCompactedReplacementItems(row) {
 }
 
 function renderSession(file, options = {}) {
-  const rows = readJsonl(file);
+  const rows = readJsonl(file, 12000, transcriptReadLimit(options));
   const agent = detectAgent(file, rows);
   const stats = {
     agent,
