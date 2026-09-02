@@ -831,3 +831,79 @@ test("CLI writes a one-file HTML export", async () => {
   assert.ok(payload);
   assert.equal(JSON.parse(payload).kind, "normalized");
 });
+
+function oversizedSessionJsonl(): string {
+  const pad = JSON.stringify({
+    timestamp: "2026-05-25T10:00:01Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: `pad-${"x".repeat(80)}` }],
+    },
+  });
+  return [
+    JSON.stringify({
+      timestamp: "2026-05-25T10:00:00Z",
+      type: "session_meta",
+      payload: { id: "HEAD_READ_BOUND_MARKER" },
+    }),
+    ...Array.from({ length: 40 }, () => pad),
+    JSON.stringify({
+      timestamp: "2026-05-25T10:00:02Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "MIDDLE_READ_BOUND_MARKER" }],
+      },
+    }),
+    ...Array.from({ length: 40 }, () => pad),
+    JSON.stringify({
+      timestamp: "2026-05-25T10:00:03Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "TAIL_READ_BOUND_MARKER" }],
+      },
+    }),
+  ].join("\n");
+}
+
+function embeddedViewerText(html: string): string {
+  const payload = /<script id="viewer-payload" type="application\/json">([^<]*)<\/script>/u.exec(
+    html,
+  )?.[1];
+  assert.ok(payload);
+  const parsed = JSON.parse(payload) as { kind: string; data: string };
+  return Buffer.from(parsed.data, "base64").toString("utf8");
+}
+
+test("CLI bounds oversized JSONL reads before HTML embed", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-viewer-bound-"));
+  const input = path.join(dir, "session.jsonl");
+  const output = path.join(dir, "session.html");
+  const text = oversizedSessionJsonl();
+  await fs.writeFile(input, `${text}\n`, "utf8");
+  const size = (await fs.stat(input)).size;
+  assert.ok(size > 400);
+  assert.match(text, /MIDDLE_READ_BOUND_MARKER/);
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    "skills/session-viewer/scripts/session-viewer.ts",
+    input,
+    "--out",
+    output,
+    "--raw",
+    "--max-read-bytes",
+    "400",
+  ]);
+  const html = await fs.readFile(output, "utf8");
+  const embedded = embeddedViewerText(html);
+  assert.match(html, /Session Viewer/);
+  assert.doesNotMatch(html, /MIDDLE_READ_BOUND_MARKER/);
+  assert.doesNotMatch(embedded, /MIDDLE_READ_BOUND_MARKER/);
+  assert.match(embedded, /HEAD_READ_BOUND_MARKER|TAIL_READ_BOUND_MARKER/);
+  assert.match(`${stdout}\n${html}\n${embedded}`, /truncat|omitted middle/i);
+});

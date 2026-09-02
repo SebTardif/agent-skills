@@ -6,9 +6,12 @@ import { parseJsonl } from "./core/jsonl.ts";
 import { buildSessionViewerHtml } from "./html.ts";
 import { resolveOpenBrowserCommand } from "./open-browser.ts";
 
+const MAX_SESSION_BYTES = 8 * 1024 * 1024;
+
 type Options = {
   blank: boolean;
   inputPath?: string;
+  maxReadBytes: number;
   open: boolean;
   outPath?: string;
   raw: boolean;
@@ -17,20 +20,34 @@ type Options = {
 function usage(): string {
   return [
     "Usage:",
-    "  node session-viewer.ts <session.jsonl> --out session.html [--open] [--raw]",
+    "  node session-viewer.ts <session.jsonl> --out session.html [--open] [--raw] [--max-read-bytes N]",
     "  node session-viewer.ts --blank --out viewer.html [--open]",
     "",
     "Options:",
-    "  --blank        Write reusable file-picker viewer",
-    "  --out PATH     Output HTML path",
-    "  --open         Open output path in the browser",
-    "  --raw          Embed raw JSONL instead of normalized data",
-    "  -h, --help     Show help",
+    "  --blank             Write reusable file-picker viewer",
+    "  --out PATH          Output HTML path",
+    "  --open              Open output path in the browser",
+    "  --raw               Embed raw JSONL instead of normalized data",
+    "  --max-read-bytes N  Max session bytes to read (default 8388608)",
+    "  -h, --help          Show help",
   ].join("\n");
 }
 
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function parseArgs(argv: string[]): Options {
-  const options: Options = { blank: false, open: false, raw: false };
+  const options: Options = {
+    blank: false,
+    maxReadBytes: MAX_SESSION_BYTES,
+    open: false,
+    raw: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "-h" || arg === "--help") {
@@ -58,6 +75,15 @@ function parseArgs(argv: string[]): Options {
       index += 1;
       continue;
     }
+    if (arg === "--max-read-bytes") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("missing value after --max-read-bytes");
+      }
+      options.maxReadBytes = parsePositiveInteger(value, "--max-read-bytes");
+      index += 1;
+      continue;
+    }
     if (arg.startsWith("-")) {
       throw new Error(`unknown option: ${arg}`);
     }
@@ -70,6 +96,42 @@ function parseArgs(argv: string[]): Options {
     throw new Error("missing input session path");
   }
   return options;
+}
+
+async function readBoundedText(
+  file: string,
+  maxBytes = MAX_SESSION_BYTES,
+): Promise<{ size: number; text: string; truncated: boolean }> {
+  const handle = await fs.open(file, "r");
+  try {
+    const stat = await handle.stat();
+    if (stat.size <= maxBytes) {
+      const buffer = Buffer.alloc(stat.size);
+      const { bytesRead } = await handle.read(buffer, 0, stat.size, 0);
+      return {
+        size: stat.size,
+        text: buffer.subarray(0, bytesRead).toString("utf8"),
+        truncated: false,
+      };
+    }
+    const half = Math.floor(maxBytes / 2);
+    const head = Buffer.alloc(half);
+    const tail = Buffer.alloc(half);
+    const { bytesRead: headBytes } = await handle.read(head, 0, half, 0);
+    const { bytesRead: tailBytes } = await handle.read(
+      tail,
+      0,
+      half,
+      Math.max(0, stat.size - half),
+    );
+    return {
+      size: stat.size,
+      text: `${head.subarray(0, headBytes).toString("utf8")}\n[...middle omitted for scan...]\n${tail.subarray(0, tailBytes).toString("utf8")}`,
+      truncated: true,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 function defaultOutputPath(inputPath: string | undefined, blank: boolean): string {
@@ -103,10 +165,16 @@ async function main(): Promise<void> {
   }
 
   const inputPath = path.resolve(options.inputPath ?? "");
-  const rawText = await fs.readFile(inputPath, "utf8");
+  const bounded = await readBoundedText(inputPath, options.maxReadBytes);
+  const rawText = bounded.text;
   const { records, warnings } = parseJsonl(rawText);
   const document = parseSessionDocument(records, inputPath);
   document.warnings.unshift(...warnings);
+  if (bounded.truncated) {
+    const warning = `source truncated: omitted middle of ${inputPath} (${bounded.size} bytes, read cap ${options.maxReadBytes} bytes)`;
+    document.warnings.unshift(warning);
+    console.log(warning);
+  }
   const html = buildSessionViewerHtml(document, {
     embedMode: options.raw ? "raw" : "normalized",
     rawText,
