@@ -42,8 +42,12 @@ Defaults:
 - detects `codex`, `claude`, or `pi-openclaw`
 - embeds normalized session data into one HTML file
 - keeps tool input/output text in the DOM so browser search can find it
-- `--raw` embeds the original JSONL and lets the browser parse it
+- reads at most 8 MiB of a session file; oversized files retain the head and tail, with a visible omission warning in the CLI and exported viewer
+- `--max-read-bytes N` overrides that positive byte limit; raise it explicitly when a complete larger export is needed
+- `--raw` embeds the retained JSONL and lets the browser parse it; truncated boundary records may be omitted
 - `--blank` creates a reusable file-picker viewer
+
+The read limit applies to CLI file exports, not files loaded through the browser's file picker.
 
 ## Where Sessions Live
 

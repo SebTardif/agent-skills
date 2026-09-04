@@ -28,7 +28,7 @@ function usage(): string {
     "  --out PATH          Output HTML path",
     "  --open              Open output path in the browser",
     "  --raw               Embed raw JSONL instead of normalized data",
-    "  --max-read-bytes N  Max session bytes to read (default 8388608)",
+    "  --max-read-bytes N   Max session bytes to read (default 8388608)",
     "  -h, --help          Show help",
   ].join("\n");
 }

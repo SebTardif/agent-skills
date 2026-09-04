@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { runInNewContext } from "node:vm";
 import { parseSessionDocument } from "./core/detect.ts";
 import { parseJsonl } from "./core/jsonl.ts";
 import { resolveOpenBrowserCommand } from "./open-browser.ts";
+import { buildSessionViewerHtml } from "./html.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -871,17 +873,46 @@ function oversizedSessionJsonl(): string {
   ].join("\n");
 }
 
-function embeddedViewerText(html: string): string {
+function embeddedViewerPayload(html: string): { kind: string; data: string; warnings?: string[] } {
   const payload = /<script id="viewer-payload" type="application\/json">([^<]*)<\/script>/u.exec(
     html,
   )?.[1];
   assert.ok(payload);
-  const parsed = JSON.parse(payload) as { kind: string; data: string };
-  return Buffer.from(parsed.data, "base64").toString("utf8");
+  return JSON.parse(payload);
 }
 
-test("CLI bounds oversized JSONL reads before HTML embed", async () => {
+function renderViewer(html: string) {
+  const elements = new Map<string, {
+    textContent: string;
+    innerHTML: string;
+    hidden: boolean;
+    value: string;
+    addEventListener: () => void;
+  }>();
+  for (const match of html.matchAll(/\bid="([^"]+)"/gu)) {
+    elements.set(match[1], {
+      textContent: "", innerHTML: "", hidden: true, value: "", addEventListener() {},
+    });
+  }
+  elements.get("viewer-payload")!.textContent = JSON.stringify(embeddedViewerPayload(html));
+  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1];
+  assert.ok(script);
+  runInNewContext(script, {
+    document: {
+      getElementById: (id: string) => elements.get(id),
+      documentElement: { dataset: {}, style: {} },
+    },
+    localStorage: { getItem: () => null },
+    window: {},
+    atob: (data: string) => Buffer.from(data, "base64").toString("binary"),
+    TextDecoder,
+  });
+  return elements;
+}
+
+test("CLI bounds oversized JSONL reads and displays warnings in both exports", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-viewer-bound-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const input = path.join(dir, "session.jsonl");
   const output = path.join(dir, "session.html");
   const text = oversizedSessionJsonl();
@@ -890,20 +921,52 @@ test("CLI bounds oversized JSONL reads before HTML embed", async () => {
   assert.ok(size > 400);
   assert.match(text, /MIDDLE_READ_BOUND_MARKER/);
 
-  const { stdout } = await execFileAsync(process.execPath, [
-    "skills/session-viewer/scripts/session-viewer.ts",
-    input,
-    "--out",
-    output,
-    "--raw",
-    "--max-read-bytes",
-    "400",
+  for (const mode of [[], ["--raw"]]) {
+    const { stdout } = await execFileAsync(process.execPath, [
+      "skills/session-viewer/scripts/session-viewer.ts",
+      input, "--out", output, ...mode, "--max-read-bytes", "400",
+    ]);
+    const html = await fs.readFile(output, "utf8");
+    const embedded = Buffer.from(embeddedViewerPayload(html).data, "base64").toString("utf8");
+    assert.doesNotMatch(embedded, /MIDDLE_READ_BOUND_MARKER/);
+    assert.match(embedded, /HEAD_READ_BOUND_MARKER|TAIL_READ_BOUND_MARKER/);
+    assert.match(stdout, /source truncated: omitted middle/);
+    const warning = renderViewer(html).get("warnings")!;
+    assert.equal(warning.hidden, false);
+    assert.match(warning.innerHTML, /source truncated: omitted middle/);
+    assert.match(warning.innerHTML, /read cap 400 bytes/);
+  }
+});
+
+test("CLI preserves exact-limit raw input without truncation", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-viewer-exact-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const input = path.join(dir, "session.jsonl");
+  const output = path.join(dir, "session.html");
+  const text = oversizedSessionJsonl();
+  await fs.writeFile(input, text);
+  await execFileAsync(process.execPath, [
+    "skills/session-viewer/scripts/session-viewer.ts", input, "--out", output,
+    "--raw", "--max-read-bytes", String(Buffer.byteLength(text)),
   ]);
   const html = await fs.readFile(output, "utf8");
-  const embedded = embeddedViewerText(html);
-  assert.match(html, /Session Viewer/);
-  assert.doesNotMatch(html, /MIDDLE_READ_BOUND_MARKER/);
-  assert.doesNotMatch(embedded, /MIDDLE_READ_BOUND_MARKER/);
-  assert.match(embedded, /HEAD_READ_BOUND_MARKER|TAIL_READ_BOUND_MARKER/);
-  assert.match(`${stdout}\n${html}\n${embedded}`, /truncat|omitted middle/i);
+  const payload = embeddedViewerPayload(html);
+  assert.equal(Buffer.from(payload.data, "base64").toString("utf8"), text);
+  assert.deepEqual(payload.warnings, []);
+  assert.equal(renderViewer(html).get("warnings")!.hidden, true);
+});
+
+test("viewer escapes warning text and accepts legacy raw payloads", () => {
+  const doc = parse(oversizedSessionJsonl());
+  doc.warnings = ['source truncated: <img src=x onerror="alert(1)"> & omitted'];
+  for (const embedMode of ["raw", "normalized"] as const) {
+    const html = buildSessionViewerHtml(doc, { embedMode, rawText: oversizedSessionJsonl() });
+    const warning = renderViewer(html).get("warnings")!;
+    assert.equal(warning.hidden, false);
+    assert.match(warning.innerHTML, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt; &amp; omitted/);
+    assert.doesNotMatch(warning.innerHTML, /<img/);
+  }
+  const html = buildSessionViewerHtml(null, { embedMode: "raw", rawText: oversizedSessionJsonl() });
+  const legacy = html.replace(',"warnings":[]', "");
+  assert.equal(renderViewer(legacy).get("warnings")!.hidden, true);
 });
