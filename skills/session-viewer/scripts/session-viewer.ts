@@ -5,13 +5,12 @@ import { parseSessionDocument } from "./core/detect.ts";
 import { parseJsonl } from "./core/jsonl.ts";
 import { buildSessionViewerHtml } from "./html.ts";
 import { resolveOpenBrowserCommand } from "./open-browser.ts";
-
-const MAX_SESSION_BYTES = 8 * 1024 * 1024;
+import { readSessionText } from "./read-session.ts";
 
 type Options = {
   blank: boolean;
   inputPath?: string;
-  maxReadBytes: number;
+  maxReadBytes?: number;
   open: boolean;
   outPath?: string;
   raw: boolean;
@@ -28,7 +27,7 @@ function usage(): string {
     "  --out PATH          Output HTML path",
     "  --open              Open output path in the browser",
     "  --raw               Embed raw JSONL instead of normalized data",
-    "  --max-read-bytes N   Max session bytes to read (default 8388608)",
+    "  --max-read-bytes N   Opt into head/tail truncation (default: full file)",
     "  -h, --help          Show help",
   ].join("\n");
 }
@@ -44,7 +43,6 @@ function parsePositiveInteger(value: string, flag: string): number {
 function parseArgs(argv: string[]): Options {
   const options: Options = {
     blank: false,
-    maxReadBytes: MAX_SESSION_BYTES,
     open: false,
     raw: false,
   };
@@ -98,42 +96,6 @@ function parseArgs(argv: string[]): Options {
   return options;
 }
 
-async function readBoundedText(
-  file: string,
-  maxBytes = MAX_SESSION_BYTES,
-): Promise<{ size: number; text: string; truncated: boolean }> {
-  const handle = await fs.open(file, "r");
-  try {
-    const stat = await handle.stat();
-    if (stat.size <= maxBytes) {
-      const buffer = Buffer.alloc(stat.size);
-      const { bytesRead } = await handle.read(buffer, 0, stat.size, 0);
-      return {
-        size: stat.size,
-        text: buffer.subarray(0, bytesRead).toString("utf8"),
-        truncated: false,
-      };
-    }
-    const half = Math.floor(maxBytes / 2);
-    const head = Buffer.alloc(half);
-    const tail = Buffer.alloc(half);
-    const { bytesRead: headBytes } = await handle.read(head, 0, half, 0);
-    const { bytesRead: tailBytes } = await handle.read(
-      tail,
-      0,
-      half,
-      Math.max(0, stat.size - half),
-    );
-    return {
-      size: stat.size,
-      text: `${head.subarray(0, headBytes).toString("utf8")}\n[...middle omitted for scan...]\n${tail.subarray(0, tailBytes).toString("utf8")}`,
-      truncated: true,
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
 function defaultOutputPath(inputPath: string | undefined, blank: boolean): string {
   if (blank || !inputPath) {
     return path.resolve("session-viewer.html");
@@ -165,7 +127,7 @@ async function main(): Promise<void> {
   }
 
   const inputPath = path.resolve(options.inputPath ?? "");
-  const bounded = await readBoundedText(inputPath, options.maxReadBytes);
+  const bounded = await readSessionText(inputPath, options.maxReadBytes);
   const rawText = bounded.text;
   const { records, warnings } = parseJsonl(rawText);
   const document = parseSessionDocument(records, inputPath);
