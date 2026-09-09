@@ -303,6 +303,150 @@ function hasSetupBlob(text) {
   );
 }
 
+function replaceTracked(text, pattern, replacement, stats) {
+  const next = text.replace(pattern, replacement);
+  if (next !== text) stats.redactions++;
+  return next;
+}
+
+function decodePercentRuns(value) {
+  let current = String(value).replaceAll("+", " ");
+  for (let depth = 0; depth < 8; depth++) {
+    const malformed =
+      depth === 0
+        ? /%(?![0-9A-Fa-f]{2})/.test(current)
+        : /%(?=[A-Za-z0-9]{2})/.test(current);
+    if (malformed) return { value: current, complete: false };
+    if (!/%[0-9A-Fa-f]{2}/.test(current)) {
+      return { value: current, complete: true };
+    }
+    let invalid = false;
+    const decoded = current.replace(/(?:%[0-9A-Fa-f]{2})+/g, (encoded) => {
+      try {
+        return decodeURIComponent(encoded);
+      } catch {
+        invalid = true;
+        return encoded;
+      }
+    });
+    if (invalid) return { value: current, complete: false };
+    if (decoded === current) return { value: current, complete: true };
+    current = decoded.replaceAll("+", " ");
+  }
+  return { value: current, complete: false };
+}
+
+function isLocalPathText(value) {
+  const decoded = String(value).trim();
+  return /^(?:file:(?:\/\/)?|~\/|\.\.?[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/i.test(
+    decoded,
+  );
+}
+
+function containsLocalPathValue(value) {
+  const decoded = decodePercentRuns(value);
+  if (!decoded.complete) return true;
+  if (isLocalPathText(decoded.value)) return true;
+  return (
+    /\bfile:(?:\/\/)?[^\s]+/i.test(decoded.value) ||
+    /(^|[\s\[\{:`"'(=,>|;&])\.\.?[\\/][^\s]+/m.test(decoded.value) ||
+    /(^|[\s\[\{:`"'(=,>|;&])[A-Za-z]:[\\/][^\s]+/m.test(decoded.value) ||
+    /(^|[\s\[\{:`"'(=,>|;&])\/(?!\/)[^\s]+/m.test(decoded.value) ||
+    /(^|[\s\[\{:`"'(=,>|;&])\\\\[^\\\s]+\\[^\s]+/m.test(decoded.value) ||
+    /(^|[\s\[\{:`"'(=,>|;&])~\/[^\s]+/m.test(decoded.value)
+  );
+}
+
+function sanitizeNetworkUrl(url, stats) {
+  let changed = false;
+  const sanitized = url.replace(
+    /([?&#])(?:([^=&#\s]*)=([^&#\s]*)|([^=&#\s]+))/g,
+    (whole, delimiter, assignedKey, value, flagKey) => {
+      const key = assignedKey ?? flagKey;
+      if (containsLocalPathValue(key)) {
+        changed = true;
+        return `${delimiter}[LOCAL_PATH]`;
+      }
+      if (assignedKey !== undefined && containsLocalPathValue(value)) {
+        changed = true;
+        return `${delimiter}${key}=[LOCAL_PATH]`;
+      }
+      return whole;
+    },
+  );
+  if (changed) stats.redactions++;
+  return sanitized;
+}
+
+function transformWithoutHttpUrls(text, transform, stats) {
+  const urls = [];
+  const protectedText = text.replace(/\bhttps?:\/\/[^\s`"'<>]+/gi, (url) => {
+    const punctuation = /[\])},.;!?]+$/.exec(url)?.[0] ?? "";
+    const coreUrl = punctuation ? url.slice(0, -punctuation.length) : url;
+    const key = `BEAMNETWORKURL${urls.length}END`;
+    const sanitized = stats ? sanitizeNetworkUrl(coreUrl, stats) : coreUrl;
+    urls.push(`${sanitized}${punctuation}`);
+    return key;
+  });
+  const transformed = transform(protectedText);
+  if (typeof transformed !== "string") return transformed;
+  return transformed.replace(
+    /BEAMNETWORKURL(\d+)END/g,
+    (_match, index) => urls[Number(index)],
+  );
+}
+
+function redactLocalPaths(text, stats) {
+  let next = text;
+  next = replaceTracked(
+    next,
+    /(["'])(?:file:(?:\/\/)?|\.\.?[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+\1/gi,
+    "[LOCAL_PATH]",
+    stats,
+  );
+  next = replaceTracked(
+    next,
+    /\bfile:(?:\/\/)?[^\s`"'<>),;]+/gi,
+    "[LOCAL_PATH]",
+    stats,
+  );
+  next = transformWithoutHttpUrls(next, (value) => {
+    let transformed = value;
+    transformed = replaceTracked(
+      transformed,
+      /(^|[\s\[\{:`"'(=,>|;&])(\.\.?[\\/][^\s`"'<>),;]+)/gm,
+      "$1[LOCAL_PATH]",
+      stats,
+    );
+    transformed = replaceTracked(
+      transformed,
+      /(^|[\s\[\{:`"'(=,>|;&])([A-Za-z]:[\\/](?:(?:[^\\/\r\n,;`"'<>]+[\\/])+[^\\/\s\r\n,;`"'<>]+|[^\\/\s\r\n,;`"'<>]+))/gm,
+      "$1[LOCAL_PATH]",
+      stats,
+    );
+    transformed = replaceTracked(
+      transformed,
+      /(^|[\s\[\{:`"'(=,>|;&])(\/(?:(?:[^/\r\n,;`"'<>]+\/)+[^/\s\r\n,;`"'<>]+|[^/\s\r\n,;`"'<>]+))/gm,
+      "$1[LOCAL_PATH]",
+      stats,
+    );
+    transformed = replaceTracked(
+      transformed,
+      /(^|[\s\[\{:`"'(=,>|;&])(\\\\[^\\\r\n,;`"'<>]+\\(?:[^\\\r\n,;`"'<>]+\\)*[^\\\s\r\n,;`"'<>]+)/gm,
+      "$1[LOCAL_PATH]",
+      stats,
+    );
+    transformed = replaceTracked(
+      transformed,
+      /~\/[^\s`"'<>),;]+/g,
+      "[HOME_PATH]",
+      stats,
+    );
+    return transformed;
+  }, stats);
+  return next;
+}
+
 function redact(input, stats) {
   let s = String(input ?? "");
   const rules = [
@@ -314,8 +458,6 @@ function redact(input, stats) {
     [/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, "[REDACTED_AUTH_HEADER]"],
     [/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED_EMAIL]"],
     [/\b(?:\+?\d[\d .()-]{7,}\d)\b/g, "[REDACTED_PHONE]"],
-    [/\/Users\/[^\s`"'>)]+/g, "[LOCAL_PATH]"],
-    [/~\/[^\s`"'>)]+/g, "[HOME_PATH]"],
     [/([?&](?:token|key|secret|signature|sig|access_token|auth)=)[^\s`"'>&]+/gi, "$1[REDACTED]"],
   ];
   for (const [re, repl] of rules) {
@@ -323,7 +465,7 @@ function redact(input, stats) {
     s = s.replace(re, repl);
     if (s !== before) stats.redactions++;
   }
-  return s;
+  return redactLocalPaths(s, stats);
 }
 
 function unsafe(text) {

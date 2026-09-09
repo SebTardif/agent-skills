@@ -50,6 +50,37 @@ test("render redacts common secrets and local identifiers", () => {
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz123456/);
 });
 
+test("render tokenizes Linux, Windows, file, and quoted paths without smashing HTTP routes", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "~/notes/todo.md. Inspect /home/alice/project and C:\\Users\\bob\\src and file:///home/alice/x and '/home/alice/Client Secret/file.js' plus /Users/ahmed/project. See https://example.test/home/docs",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /\[LOCAL_PATH\]/);
+  assert.match(output, /\[HOME_PATH\]/);
+  assert.match(output, /https:\/\/example\.test\/home\/docs/);
+  assert.doesNotMatch(output, /\/home\/alice/);
+  assert.doesNotMatch(output, /C:\\Users\\bob/);
+  assert.doesNotMatch(output, /file:\/\/\/home\/alice/);
+  assert.doesNotMatch(output, /Client Secret/);
+  assert.doesNotMatch(output, /\/Users\/ahmed/);
+  assert.doesNotMatch(output, /~\/notes/);
+});
+
 test("render drops raw tool outputs but keeps a compact tool summary", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
