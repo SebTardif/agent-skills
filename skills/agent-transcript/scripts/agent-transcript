@@ -380,13 +380,14 @@ function sanitizeNetworkUrl(url, stats) {
 
 function transformWithoutHttpUrls(text, transform, stats) {
   const urls = [];
+  const tokenId = process.hrtime.bigint().toString(36);
   const protectedText = text.replace(/\bhttps?:\/\/[^\s`"'<>]+/gi, (url) => {
     const punctuation = /[\])},.;!?]+$/.exec(url)?.[0] ?? "";
     let coreUrl = punctuation ? url.slice(0, -punctuation.length) : url;
-    const adjacentField = /,[A-Za-z_][\w]*=/.exec(coreUrl);
+    const adjacentField = /[,;][A-Za-z_][\w-]*=/.exec(coreUrl);
     const remainder = adjacentField ? coreUrl.slice(adjacentField.index) : "";
     if (adjacentField) coreUrl = coreUrl.slice(0, adjacentField.index);
-    const key = `BEAMNETWORKURL${urls.length}END`;
+    const key = `BEAMNETWORKURL${tokenId}N${urls.length}END`;
     const sanitized = stats ? sanitizeNetworkUrl(coreUrl, stats) : coreUrl;
     urls.push(`${sanitized}${punctuation}`);
     return `${key}${remainder}`;
@@ -394,8 +395,8 @@ function transformWithoutHttpUrls(text, transform, stats) {
   const transformed = transform(protectedText);
   if (typeof transformed !== "string") return transformed;
   return transformed.replace(
-    /BEAMNETWORKURL(\d+)END/g,
-    (_match, index) => urls[Number(index)],
+    new RegExp(`BEAMNETWORKURL${tokenId}N(\\d+)END`, "g"),
+    (_match, index) => urls[Number(index)] ?? _match,
   );
 }
 

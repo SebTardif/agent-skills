@@ -182,6 +182,83 @@ test("render redacts compiler response-file arguments", () => {
   assert.doesNotMatch(output, /args\.rsp/);
 });
 
+test("render redacts semicolon-adjacent local fields beside a URL", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "url=https://example.test/docs;local=/Users/alice/private",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.match(output, /local=\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /alice\/private/);
+});
+
+test("render redacts hyphenated local fields beside a URL", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "url=https://example.test/docs,local-path=/Users/alice/private",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.match(output, /local-path=\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /alice\/private/);
+});
+
+test("render leaves literal URL placeholders in dialogue", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Explain BEAMNETWORKURL0END then https://example.test/docs",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /Explain BEAMNETWORKURL0END/);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.doesNotMatch(output, /Explain undefined/);
+});
+
 test("render drops raw tool outputs but keeps a compact tool summary", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
