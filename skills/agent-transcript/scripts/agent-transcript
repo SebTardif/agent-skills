@@ -412,27 +412,37 @@ function redactLocalPaths(text, stats) {
   );
   next = transformWithoutHttpUrls(next, (value) => {
     let transformed = value;
+    const prefix = "(^|[\\s\\[\\{:`\"'(=,>|;&]|-[A-Za-z][A-Za-z0-9]*)";
     transformed = replaceTracked(
       transformed,
-      /(^|[\s\[\{:`"'(=,>|;&])(\.\.?[\\/][^\s`"'<>),;]+)/gm,
+      new RegExp(`${prefix}(\\.\\.?[\\\\/][^\\s\`"'<>),;]+)`, "gm"),
       "$1[LOCAL_PATH]",
       stats,
     );
     transformed = replaceTracked(
       transformed,
-      /(^|[\s\[\{:`"'(=,>|;&])([A-Za-z]:[\\/](?:(?:[^\\/\r\n,;`"'<>]+[\\/])+[^\\/\s\r\n,;`"'<>]+|[^\\/\s\r\n,;`"'<>]+))/gm,
+      new RegExp(
+        `${prefix}([A-Za-z]:[\\\\/](?:(?:[^\\\\/\\s\\r\\n,;\`"'<>]+[\\\\/])+[^\\\\/\\s\\r\\n,;\`"'<>]+|[^\\\\/\\s\\r\\n,;\`"'<>]+))`,
+        "gm",
+      ),
       "$1[LOCAL_PATH]",
       stats,
     );
     transformed = replaceTracked(
       transformed,
-      /(^|[\s\[\{:`"'(=,>|;&])(\/(?:(?:[^/\r\n,;`"'<>]+\/)+[^/\s\r\n,;`"'<>]+|[^/\s\r\n,;`"'<>]+))/gm,
+      new RegExp(
+        `${prefix}(\\/(?:(?:[^/\\s\\r\\n,;\`"'<>]+\\/)+[^/\\s\\r\\n,;\`"'<>]+|[^/\\s\\r\\n,;\`"'<>]+))`,
+        "gm",
+      ),
       "$1[LOCAL_PATH]",
       stats,
     );
     transformed = replaceTracked(
       transformed,
-      /(^|[\s\[\{:`"'(=,>|;&])(\\\\[^\\\r\n,;`"'<>]+\\(?:[^\\\r\n,;`"'<>]+\\)*[^\\\s\r\n,;`"'<>]+)/gm,
+      new RegExp(
+        `${prefix}(\\\\\\\\[^\\\\\\s\\r\\n,;\`"'<>]+\\\\(?:[^\\\\\\s\\r\\n,;\`"'<>]+\\\\)*[^\\\\\\s\\r\\n,;\`"'<>]+)`,
+        "gm",
+      ),
       "$1[LOCAL_PATH]",
       stats,
     );

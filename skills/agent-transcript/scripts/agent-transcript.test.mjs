@@ -81,6 +81,56 @@ test("render tokenizes Linux, Windows, file, and quoted paths without smashing H
   assert.doesNotMatch(output, /~\/notes/);
 });
 
+test("render redacts compiler-attached macOS paths", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "cc -I/Users/alice/private/include main.c",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /cc -I\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /private\/include/);
+});
+
+test("render keeps prose and URLs between two local paths", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Read /Users/alice/a then https://example.test/docs and /Users/bob/b",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /Read \[LOCAL_PATH\] then https:\/\/example\.test\/docs and \[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /\/Users\/bob/);
+});
+
 test("render drops raw tool outputs but keeps a compact tool summary", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
