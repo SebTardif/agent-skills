@@ -131,6 +131,57 @@ test("render keeps prose and URLs between two local paths", () => {
   assert.doesNotMatch(output, /\/Users\/bob/);
 });
 
+test("render redacts local fields adjacent to a protected URL", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "url=https://example.test/docs,local=/Users/alice/private",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.match(output, /local=\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /alice\/private/);
+});
+
+test("render redacts compiler response-file arguments", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "cc @/Users/alice/private/args.rsp",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /cc @\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /args\.rsp/);
+});
+
 test("render drops raw tool outputs but keeps a compact tool summary", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");

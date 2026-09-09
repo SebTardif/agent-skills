@@ -382,11 +382,14 @@ function transformWithoutHttpUrls(text, transform, stats) {
   const urls = [];
   const protectedText = text.replace(/\bhttps?:\/\/[^\s`"'<>]+/gi, (url) => {
     const punctuation = /[\])},.;!?]+$/.exec(url)?.[0] ?? "";
-    const coreUrl = punctuation ? url.slice(0, -punctuation.length) : url;
+    let coreUrl = punctuation ? url.slice(0, -punctuation.length) : url;
+    const adjacentField = /,[A-Za-z_][\w]*=/.exec(coreUrl);
+    const remainder = adjacentField ? coreUrl.slice(adjacentField.index) : "";
+    if (adjacentField) coreUrl = coreUrl.slice(0, adjacentField.index);
     const key = `BEAMNETWORKURL${urls.length}END`;
     const sanitized = stats ? sanitizeNetworkUrl(coreUrl, stats) : coreUrl;
     urls.push(`${sanitized}${punctuation}`);
-    return key;
+    return `${key}${remainder}`;
   });
   const transformed = transform(protectedText);
   if (typeof transformed !== "string") return transformed;
@@ -412,7 +415,7 @@ function redactLocalPaths(text, stats) {
   );
   next = transformWithoutHttpUrls(next, (value) => {
     let transformed = value;
-    const prefix = "(^|[\\s\\[\\{:`\"'(=,>|;&]|-[A-Za-z][A-Za-z0-9]*)";
+    const prefix = "(^|[\\s\\[\\{:`\"'(=,>|;&@]|-[A-Za-z][A-Za-z0-9]*)";
     transformed = replaceTracked(
       transformed,
       new RegExp(`${prefix}(\\.\\.?[\\\\/][^\\s\`"'<>),;]+)`, "gm"),
