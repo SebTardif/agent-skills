@@ -419,14 +419,14 @@ function redactLocalPaths(text, stats) {
     const prefix = "(^|[\\s\\[\\{:`\"'(=,>|;&@]|-[A-Za-z][A-Za-z0-9]*)";
     transformed = replaceTracked(
       transformed,
-      new RegExp(`${prefix}(\\.\\.?[\\\\/][^\\s\`"'<>),;]+)`, "gm"),
+      new RegExp(`${prefix}(\\.\\.?[\\\\/][^\\s\`"'<>);]+)`, "gm"),
       "$1[LOCAL_PATH]",
       stats,
     );
     transformed = replaceTracked(
       transformed,
       new RegExp(
-        `${prefix}([A-Za-z]:[\\\\/](?:(?:[^\\\\/\\s\\r\\n,;\`"'<>]+[\\\\/])+[^\\\\/\\s\\r\\n,;\`"'<>]+|[^\\\\/\\s\\r\\n,;\`"'<>]+))`,
+        `${prefix}([A-Za-z]:[\\\\/](?:(?:[^\\\\/\\s\\r\\n;\`"'<>]+[\\\\/])+[^\\\\/\\s\\r\\n;\`"'<>]+|[^\\\\/\\s\\r\\n;\`"'<>]+))`,
         "gm",
       ),
       "$1[LOCAL_PATH]",
@@ -435,7 +435,7 @@ function redactLocalPaths(text, stats) {
     transformed = replaceTracked(
       transformed,
       new RegExp(
-        `${prefix}(\\/(?:(?:[^/\\s\\r\\n,;\`"'<>]+\\/)+[^/\\s\\r\\n,;\`"'<>]+|[^/\\s\\r\\n,;\`"'<>]+))`,
+        `${prefix}(\\/(?:(?:[^/\\s\\r\\n;\`"'<>]+\\/)+[^/\\s\\r\\n;\`"'<>]+|[^/\\s\\r\\n;\`"'<>]+))`,
         "gm",
       ),
       "$1[LOCAL_PATH]",
@@ -444,7 +444,7 @@ function redactLocalPaths(text, stats) {
     transformed = replaceTracked(
       transformed,
       new RegExp(
-        `${prefix}(\\\\\\\\[^\\\\\\s\\r\\n,;\`"'<>]+\\\\(?:[^\\\\\\s\\r\\n,;\`"'<>]+\\\\)*[^\\\\\\s\\r\\n,;\`"'<>]+)`,
+        `${prefix}(\\\\\\\\[^\\\\\\s\\r\\n;\`"'<>]+\\\\(?:[^\\\\\\s\\r\\n;\`"'<>]+\\\\)*[^\\\\\\s\\r\\n;\`"'<>]+)`,
         "gm",
       ),
       "$1[LOCAL_PATH]",
@@ -452,7 +452,7 @@ function redactLocalPaths(text, stats) {
     );
     transformed = replaceTracked(
       transformed,
-      /~\/[^\s`"'<>),;]+/g,
+      /~\/[^\s`"'<>);]+/g,
       "[HOME_PATH]",
       stats,
     );

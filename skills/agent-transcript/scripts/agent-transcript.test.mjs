@@ -234,6 +234,32 @@ test("render redacts hyphenated local fields beside a URL", () => {
   assert.doesNotMatch(output, /alice\/private/);
 });
 
+test("render redacts unquoted paths with a comma in a filename", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Read /Users/alice/Acme,Private/plan.md",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /Read \[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /Private\/plan/);
+  assert.doesNotMatch(output, /plan\.md/);
+});
+
 test("render leaves literal URL placeholders in dialogue", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
