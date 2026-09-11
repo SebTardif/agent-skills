@@ -400,6 +400,14 @@ function transformWithoutHttpUrls(text, transform, stats) {
   );
 }
 
+function hasPathStartBoundary(text, index) {
+  if (index === 0) return true;
+  const prev = text[index - 1];
+  if (/[\s`"'<>=:({[,;@]/.test(prev)) return true;
+  if (prev === "I" && index >= 2 && text[index - 2] === "-") return true;
+  return false;
+}
+
 function startsLocalPath(text, index) {
   const slice = text.slice(index);
   if (/^file:/i.test(slice)) return slice.match(/^file:(?:\/\/)?/i)?.[0] ?? "file:";
@@ -408,12 +416,14 @@ function startsLocalPath(text, index) {
   if (slice.startsWith("./")) return "./";
   if (slice.startsWith("\\\\")) return "\\\\";
   if (/^[A-Za-z]:[\\/]/.test(slice)) return slice.slice(0, 3);
-  if (slice.startsWith("/") && !slice.startsWith("//")) return "/";
+  if (slice.startsWith("/") && !slice.startsWith("//") && hasPathStartBoundary(text, index)) {
+    return "/";
+  }
   return "";
 }
 
 function isAdjacentFieldSeparator(text, index) {
-  return /[,;][A-Za-z_][\w-]*=/.test(text.slice(index));
+  return /^[,;][A-Za-z_][\w-]*=/.test(text.slice(index));
 }
 
 function looksLikeLocalPathToken(value) {
@@ -438,11 +448,16 @@ function tryQuotedLocalPath(text, index) {
 
 function tryDelimitedLocalPath(text, index, open, close) {
   if (!text.startsWith(open, index)) return null;
-  const end = text.indexOf(close, index + open.length);
-  if (end === -1) return null;
-  const inner = text.slice(index + open.length, end);
+  const innerStart = index + open.length;
+  let cursor = innerStart;
+  while (cursor < text.length && !/[\s<>]/.test(text[cursor])) {
+    cursor += 1;
+  }
+  if (cursor < innerStart + close.length) return null;
+  if (!text.startsWith(close, cursor - close.length)) return null;
+  const inner = text.slice(innerStart, cursor - close.length);
   if (!looksLikeLocalPathToken(inner)) return null;
-  return { end: end + close.length, replacement: `${open}${pathLabel(inner)}${close}` };
+  return { end: cursor, replacement: `${open}${pathLabel(inner)}${close}` };
 }
 
 function consumeUnquotedLocalPath(text, start) {
@@ -451,7 +466,15 @@ function consumeUnquotedLocalPath(text, start) {
   let index = start + kind.length;
   while (index < text.length) {
     const ch = text[index];
-    if (/[\s`"'<>)\]}]/.test(ch)) break;
+    if (/[\s`"'<>)}]/.test(ch)) break;
+    if (ch === "]") {
+      const next = text[index + 1];
+      if (next && /[A-Za-z0-9._[+-]/.test(next)) {
+        index += 1;
+        continue;
+      }
+      break;
+    }
     if ((ch === "," || ch === ";") && isAdjacentFieldSeparator(text, index)) break;
     index += 1;
   }

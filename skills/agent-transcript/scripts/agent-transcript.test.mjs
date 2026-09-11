@@ -339,6 +339,112 @@ test("render keeps a URL field after a comma-bearing local path", () => {
   assert.doesNotMatch(output, /\/Users\/alice/);
 });
 
+test("render redacts a comma-bearing filename before an adjacent URL field", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "local=/Users/alice/Acme,Confidential.txt,url=https://example.test/docs",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /local=\[LOCAL_PATH\]/);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /Confidential/);
+  assert.doesNotMatch(output, /Acme,/);
+});
+
+test("render redacts emphasis paths whose filenames contain the closer", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Inspect _/Users/alice/client_secret.txt_",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /_\[LOCAL_PATH\]_/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /client_secret/);
+  assert.doesNotMatch(output, /secret\.txt/);
+});
+
+test("render redacts unquoted paths with brackets in the filename", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Read /Users/alice/[draft]Acquisition.txt",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /Read \[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /Acquisition/);
+  assert.doesNotMatch(output, /\[draft\]/);
+});
+
+test("render leaves slash-separated prose alone", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Discuss success/failure and and/or before /Users/alice/private/plan.md",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /success\/failure/);
+  assert.match(output, /and\/or/);
+  assert.match(output, /\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /private\/plan/);
+});
+
 test("render leaves literal URL placeholders in dialogue", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
