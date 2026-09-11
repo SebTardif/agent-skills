@@ -400,65 +400,109 @@ function transformWithoutHttpUrls(text, transform, stats) {
   );
 }
 
+function startsLocalPath(text, index) {
+  const slice = text.slice(index);
+  if (/^file:/i.test(slice)) return slice.match(/^file:(?:\/\/)?/i)?.[0] ?? "file:";
+  if (slice.startsWith("~/")) return "~/";
+  if (slice.startsWith("../")) return "../";
+  if (slice.startsWith("./")) return "./";
+  if (slice.startsWith("\\\\")) return "\\\\";
+  if (/^[A-Za-z]:[\\/]/.test(slice)) return slice.slice(0, 3);
+  if (slice.startsWith("/") && !slice.startsWith("//")) return "/";
+  return "";
+}
+
+function isAdjacentFieldSeparator(text, index) {
+  return /[,;][A-Za-z_][\w-]*=/.test(text.slice(index));
+}
+
+function looksLikeLocalPathToken(value) {
+  const trimmed = String(value).trim();
+  if (!trimmed) return false;
+  return Boolean(startsLocalPath(trimmed, 0)) || isLocalPathText(trimmed);
+}
+
+function pathLabel(value) {
+  return String(value).trim().startsWith("~/") ? "[HOME_PATH]" : "[LOCAL_PATH]";
+}
+
+function tryQuotedLocalPath(text, index) {
+  const quote = text[index];
+  if (quote !== '"' && quote !== "'") return null;
+  const end = text.indexOf(quote, index + 1);
+  if (end === -1) return null;
+  const inner = text.slice(index + 1, end);
+  if (!looksLikeLocalPathToken(inner)) return null;
+  return { end: end + 1, replacement: pathLabel(inner) };
+}
+
+function tryDelimitedLocalPath(text, index, open, close) {
+  if (!text.startsWith(open, index)) return null;
+  const end = text.indexOf(close, index + open.length);
+  if (end === -1) return null;
+  const inner = text.slice(index + open.length, end);
+  if (!looksLikeLocalPathToken(inner)) return null;
+  return { end: end + close.length, replacement: `${open}${pathLabel(inner)}${close}` };
+}
+
+function consumeUnquotedLocalPath(text, start) {
+  const kind = startsLocalPath(text, start);
+  if (!kind) return start;
+  let index = start + kind.length;
+  while (index < text.length) {
+    const ch = text[index];
+    if (/[\s`"'<>)\]}]/.test(ch)) break;
+    if ((ch === "," || ch === ";") && isAdjacentFieldSeparator(text, index)) break;
+    index += 1;
+  }
+  if (index <= start + kind.length) return start;
+  return index;
+}
+
+function redactPathTokens(text, stats) {
+  let out = "";
+  let index = 0;
+  let hits = 0;
+  while (index < text.length) {
+    const quoted = tryQuotedLocalPath(text, index);
+    if (quoted) {
+      out += quoted.replacement;
+      index = quoted.end;
+      hits += 1;
+      continue;
+    }
+    let delimited = tryDelimitedLocalPath(text, index, "```", "```");
+    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "**", "**");
+    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "__", "__");
+    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "`", "`");
+    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "*", "*");
+    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "_", "_");
+    if (delimited) {
+      out += delimited.replacement;
+      index = delimited.end;
+      hits += 1;
+      continue;
+    }
+    const pathEnd = consumeUnquotedLocalPath(text, index);
+    if (pathEnd > index) {
+      out += pathLabel(text.slice(index, pathEnd));
+      index = pathEnd;
+      hits += 1;
+      continue;
+    }
+    out += text[index];
+    index += 1;
+  }
+  if (hits) stats.redactions += hits;
+  return out;
+}
+
 function redactLocalPaths(text, stats) {
-  let next = text;
-  next = replaceTracked(
-    next,
-    /(["'])(?:file:(?:\/\/)?|\.\.?[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+\1/gi,
-    "[LOCAL_PATH]",
+  return transformWithoutHttpUrls(
+    text,
+    (value) => redactPathTokens(value, stats),
     stats,
   );
-  next = replaceTracked(
-    next,
-    /\bfile:(?:\/\/)?[^\s`"'<>),;]+/gi,
-    "[LOCAL_PATH]",
-    stats,
-  );
-  next = transformWithoutHttpUrls(next, (value) => {
-    let transformed = value;
-    const prefix = "(^|[\\s\\[\\{:`\"'(=,>|;&@]|-[A-Za-z][A-Za-z0-9]*)";
-    transformed = replaceTracked(
-      transformed,
-      new RegExp(`${prefix}(\\.\\.?[\\\\/][^\\s\`"'<>);]+)`, "gm"),
-      "$1[LOCAL_PATH]",
-      stats,
-    );
-    transformed = replaceTracked(
-      transformed,
-      new RegExp(
-        `${prefix}([A-Za-z]:[\\\\/](?:(?:[^\\\\/\\s\\r\\n;\`"'<>]+[\\\\/])+[^\\\\/\\s\\r\\n;\`"'<>]+|[^\\\\/\\s\\r\\n;\`"'<>]+))`,
-        "gm",
-      ),
-      "$1[LOCAL_PATH]",
-      stats,
-    );
-    transformed = replaceTracked(
-      transformed,
-      new RegExp(
-        `${prefix}(\\/(?:(?:[^/\\s\\r\\n;\`"'<>]+\\/)+[^/\\s\\r\\n;\`"'<>]+|[^/\\s\\r\\n;\`"'<>]+))`,
-        "gm",
-      ),
-      "$1[LOCAL_PATH]",
-      stats,
-    );
-    transformed = replaceTracked(
-      transformed,
-      new RegExp(
-        `${prefix}(\\\\\\\\[^\\\\\\s\\r\\n;\`"'<>]+\\\\(?:[^\\\\\\s\\r\\n;\`"'<>]+\\\\)*[^\\\\\\s\\r\\n;\`"'<>]+)`,
-        "gm",
-      ),
-      "$1[LOCAL_PATH]",
-      stats,
-    );
-    transformed = replaceTracked(
-      transformed,
-      /~\/[^\s`"'<>);]+/g,
-      "[HOME_PATH]",
-      stats,
-    );
-    return transformed;
-  }, stats);
-  return next;
 }
 
 function redact(input, stats) {

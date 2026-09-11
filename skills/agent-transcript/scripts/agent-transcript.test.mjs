@@ -260,6 +260,85 @@ test("render redacts unquoted paths with a comma in a filename", () => {
   assert.doesNotMatch(output, /plan\.md/);
 });
 
+test("render redacts markdown-emphasis local paths", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Inspect **/Users/alice/private/plan.md** and _/Users/bob/secret.txt_",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /\/Users\/bob/);
+  assert.doesNotMatch(output, /private\/plan/);
+  assert.doesNotMatch(output, /secret\.txt/);
+});
+
+test("render redacts backtick paths that contain a semicolon", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Open `/Users/alice/Acme;Private/plan.md` and `~/Acme;Private/plan.md`",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /\[LOCAL_PATH\]/);
+  assert.match(output, /\[HOME_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /;Private/);
+  assert.doesNotMatch(output, /plan\.md/);
+});
+
+test("render keeps a URL field after a comma-bearing local path", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "local=/Users/alice/a,url=https://example.test/docs",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /local=\[LOCAL_PATH\]/);
+  assert.match(output, /https:\/\/example\.test\/docs/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+});
+
 test("render leaves literal URL placeholders in dialogue", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");
