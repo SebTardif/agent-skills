@@ -418,6 +418,82 @@ test("render redacts unquoted paths with brackets in the filename", () => {
   assert.doesNotMatch(output, /\[draft\]/);
 });
 
+test("render redacts emphasis paths before trailing punctuation", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Inspect **/Users/alice/private.txt**, please",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /\*\*\[LOCAL_PATH\]\*\*, please/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /private\.txt/);
+});
+
+test("render redacts compiler-attached -L paths", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "cc -L/Users/alice/private/lib main.c",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /cc -L\[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /private\/lib/);
+});
+
+test("render redacts bracketed directory components", () => {
+  const dir = tempDir();
+  const session = path.join(dir, "session.jsonl");
+  writeJsonl(session, [
+    {
+      type: "response_item",
+      payload: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Read /Users/alice/[draft]/Acquisition.txt",
+          },
+        ],
+      },
+    },
+    { type: "response_item", payload: { role: "assistant", content: [{ type: "text", text: "Done." }] } },
+  ]);
+
+  const output = run(["render", "--session", session]);
+  assert.match(output, /Read \[LOCAL_PATH\]/);
+  assert.doesNotMatch(output, /\/Users\/alice/);
+  assert.doesNotMatch(output, /Acquisition/);
+  assert.doesNotMatch(output, /\[draft\]/);
+});
+
 test("render leaves slash-separated prose alone", () => {
   const dir = tempDir();
   const session = path.join(dir, "session.jsonl");

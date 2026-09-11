@@ -400,12 +400,19 @@ function transformWithoutHttpUrls(text, transform, stats) {
   );
 }
 
+function hasCompilerAttachedPrefix(text, index) {
+  if (index === 0) return false;
+  let i = index - 1;
+  if (!/[A-Za-z]/.test(text[i])) return false;
+  while (i > 0 && /[A-Za-z]/.test(text[i - 1])) i -= 1;
+  return i > 0 && text[i - 1] === "-";
+}
+
 function hasPathStartBoundary(text, index) {
   if (index === 0) return true;
   const prev = text[index - 1];
   if (/[\s`"'<>=:({[,;@]/.test(prev)) return true;
-  if (prev === "I" && index >= 2 && text[index - 2] === "-") return true;
-  return false;
+  return hasCompilerAttachedPrefix(text, index);
 }
 
 function startsLocalPath(text, index) {
@@ -453,11 +460,38 @@ function tryDelimitedLocalPath(text, index, open, close) {
   while (cursor < text.length && !/[\s<>]/.test(text[cursor])) {
     cursor += 1;
   }
-  if (cursor < innerStart + close.length) return null;
-  if (!text.startsWith(close, cursor - close.length)) return null;
-  const inner = text.slice(innerStart, cursor - close.length);
+  let tokenEnd = cursor;
+  while (tokenEnd > innerStart && /[,.;:!?]/.test(text[tokenEnd - 1])) {
+    tokenEnd -= 1;
+  }
+  if (tokenEnd < innerStart + close.length) return null;
+  if (!text.startsWith(close, tokenEnd - close.length)) return null;
+  const inner = text.slice(innerStart, tokenEnd - close.length);
   if (!looksLikeLocalPathToken(inner)) return null;
-  return { end: cursor, replacement: `${open}${pathLabel(inner)}${close}` };
+  return { end: tokenEnd, replacement: `${open}${pathLabel(inner)}${close}` };
+}
+
+function tryAnyDelimitedLocalPath(text, index) {
+  const ch = text[index];
+  if (ch === "`") {
+    return (
+      tryDelimitedLocalPath(text, index, "```", "```") ||
+      tryDelimitedLocalPath(text, index, "`", "`")
+    );
+  }
+  if (ch === "*") {
+    return (
+      tryDelimitedLocalPath(text, index, "**", "**") ||
+      tryDelimitedLocalPath(text, index, "*", "*")
+    );
+  }
+  if (ch === "_") {
+    return (
+      tryDelimitedLocalPath(text, index, "__", "__") ||
+      tryDelimitedLocalPath(text, index, "_", "_")
+    );
+  }
+  return null;
 }
 
 function consumeUnquotedLocalPath(text, start) {
@@ -469,7 +503,7 @@ function consumeUnquotedLocalPath(text, start) {
     if (/[\s`"'<>)}]/.test(ch)) break;
     if (ch === "]") {
       const next = text[index + 1];
-      if (next && /[A-Za-z0-9._[+-]/.test(next)) {
+      if (next && /[A-Za-z0-9._/[+-]/.test(next)) {
         index += 1;
         continue;
       }
@@ -494,12 +528,7 @@ function redactPathTokens(text, stats) {
       hits += 1;
       continue;
     }
-    let delimited = tryDelimitedLocalPath(text, index, "```", "```");
-    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "**", "**");
-    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "__", "__");
-    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "`", "`");
-    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "*", "*");
-    if (!delimited) delimited = tryDelimitedLocalPath(text, index, "_", "_");
+    const delimited = tryAnyDelimitedLocalPath(text, index);
     if (delimited) {
       out += delimited.replacement;
       index = delimited.end;
